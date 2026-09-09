@@ -1,5 +1,6 @@
 package-as: Floating_Combat_Alert
 enable-nolib-creation: no
+manual-changelog: CHANGELOG.md
 
 ignore:
     - README.md
