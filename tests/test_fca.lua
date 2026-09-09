@@ -474,6 +474,33 @@ env:AdvanceTime(1.5);
 env:TickAnims();
 ok(ACount() == 0, "faded alert still despawns on schedule");
 
+-- mid-flight restyles continue from the exact position and alpha (no restart)
+SyncOutOfCombat();
+env:FireEvent("PLAYER_ENTER_COMBAT");
+env:AdvanceTime(0.5); -- 50% of the 1s enter duration
+env:TickAnims();
+local yMid = select(5, ALast():GetPoint(1));
+local alphaMid = AAlpha(); -- fading since spawn (fade start 0)
+options.enterCol.textBox:SetText("retuned");
+options.enterCol.textBox:GetScript("OnEnterPressed")(options.enterCol.textBox);
+ok(approx(select(5, ALast():GetPoint(1)), yMid), "restyle keeps the in-flight text position",
+    tostring(select(5, ALast():GetPoint(1))));
+ok(approx(AAlpha(), alphaMid, 0.05), "restyle keeps the in-flight alpha", AAlpha());
+options.enterCol.duration:SetText("3");
+options.enterCol.duration:GetScript("OnEnterPressed")(options.enterCol.duration);
+ok(approx(select(5, ALast():GetPoint(1)), yMid, 0.01), "duration change keeps the text in place",
+    tostring(select(5, ALast():GetPoint(1))));
+env:AdvanceTime(0.6);
+env:TickAnims();
+local yLater = select(5, ALast():GetPoint(1));
+ok(AnyVisible() and yLater > yMid, "travel continues onward at the new pace", tostring(yLater));
+env:AdvanceTime(3);
+env:TickAnims();
+ok(ACount() == 0, "extended alert despawns at the new duration");
+-- restore the 1s duration the later window-close tests rely on
+options.enterCol.duration:SetText("1");
+options.enterCol.duration:GetScript("OnEnterPressed")(options.enterCol.duration);
+
 -- ----------------------------------------------------------------------------
 -- Region band editor
 -- ----------------------------------------------------------------------------

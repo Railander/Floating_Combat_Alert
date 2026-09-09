@@ -9,7 +9,7 @@ Target client: Midnight 12.1 (`## Interface: 120100` in the .toc — bump it if 
 - Floating "Entering Combat" (red) / "Leaving Combat" (green) text driven by the player unit's combat state, with two redundant triggers: `PLAYER_ENTER_COMBAT`/`PLAYER_LEAVE_COMBAT` plus `UNIT_FLAGS` transitions checked against `UnitAffectingCombat("player")` — deliberately not the regen lockout (regen lags real combat state and can keep running in combat, e.g. troll racial)
 - **Concurrent messages**: a new combat message spawns its own floating text and never replaces an in-flight one — rapid transitions leave multiple texts floating through the band at once (capped at 8; duplicate triggers for the same transition never double-spawn)
 - The text is fully bound inside the configurable on-screen **region**: its bottom edge starts at the region's bottom and its top edge ends at the region's top, fading as it goes
-- `/fca` opens a small drag-and-drop options window. While it is open a test loop alternates both alerts constantly; closing the window stops the loop and despawns its text (real combat alerts are unaffected)
+- `/fca` opens a small drag-and-drop options window. While it is open a test loop alternates both alerts, each entering while the previous is at 80% of its travel so the texts chain with a slight overlap; closing the window stops the loop and despawns its text (real combat alerts are unaffected)
   - Both alert columns (Entering / Leaving) are always visible side by side, with a **Link checkbox column** on the left — one checkbox per setting (font, size, color, outline, text). Linked settings edit both alerts at once; unlinked ones edit only their column
   - **Link defaults**: font/size/outline/text linked; **color unlinked** (entering = red, leaving = green)
   - **Font**: real dropdown of the seven western typefaces the game ships — Friz Quadrata (latin/cyrillic), Arial Narrow, Morpheus (latin/cyrillic), Skurri (latin/cyrillic) — each name rendered in its own font. Candidates are validated at load against the actual client, so only fonts that exist and load appear. (The CJK locale families are excluded on purpose: their Latin glyphs fall back to the default font, making them pointless here.)
@@ -23,19 +23,17 @@ Target client: Midnight 12.1 (`## Interface: 120100` in the .toc — bump it if 
   - **Move region**: semi-transparent overlay of the travel band, sized horizontally to hug the widest of the two alert texts (grows/shrinks with font, size and text changes, including the bigger side after unlinking). Drag the top/bottom green edges (50% alpha) to set the walk distance, drag the middle to move it anywhere. The four coordinate values are plain clickthrough text readouts (relative to screen center, positive Y up): left/right show the derived band edges, top/bottom show the Y values the handles set
 - The config window position persists across sessions (defaults to screen center); no alert plays on login
 - The color picker opens above all addon windows and can be dragged by its header
-- Style/size/color/appearance/text/direction/duration/fade changes restyle an already-flying alert immediately; no need to wait for the next one
+- Style/size/color/appearance/text/direction/duration/fade changes restyle an already-flying alert immediately, resuming from its current position and alpha — nothing restarts or jumps; no need to wait for the next alert
 
 ## Slash commands
 
 | Command | Effect |
 | --- | --- |
-| `/fca` | Open/close the options window |
+| `/fca` (or anything unrecognized) | Open/close the options window |
 | `/fca test in` / `/fca test out` | Preview the enter/leave alert |
 | `/fca region` | Toggle the region editor |
 | `/fca duration <sec>` | How long each alert stays on screen |
-| `/fca print` | Print current config |
 | `/fca reset` | Restore all default settings (window re-centers too) |
-| anything else | Print instructions |
 
 ## Installing in the game client
 

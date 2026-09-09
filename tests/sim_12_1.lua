@@ -145,10 +145,10 @@ slash("");
 ok(options:IsShown(), "/fca opens the options window");
 (options:GetScript("OnShow") or function() end)(options);
 
--- combat text spawns fresh while the loop is running
+-- combat text spawns fresh while the loop runs on its own cadence
 env.playerInCombat = false;
 env:FireEvent("UNIT_FLAGS", "player");
-env:Pump(3.5); -- outlast the leave text above; the loop spawns its first preview
+env:Pump(3.5); -- let the preview loop establish its cadence
 env.playerInCombat = true;
 env:FireEvent("UNIT_FLAGS", "player");
 ok(#alert.active >= 2 and AText() == db.enter.text,
@@ -157,9 +157,17 @@ env:Pump(0.1);
 ok(AAlpha() > 0.9, "combat alert renders at full alpha while the loop runs", AAlpha());
 env:Pump(3);
 
-local sawEnter, sawLeave = false, false;
+local sawEnter, sawLeave, maxLoop = false, false, 0;
+local function LoopCount()
+    local n = 0;
+    for _, a in ipairs(alert.active) do
+        if a.fromLoop then n = n + 1; end
+    end
+    return n;
+end
 for _ = 1, 36 do
     env:Pump(0.25);
+    maxLoop = math.max(maxLoop, LoopCount());
     if #alert.active > 0 then
         if AText() == db.enter.text then sawEnter = true; end
         if AText() == db.leave.text then sawLeave = true; end
@@ -168,7 +176,8 @@ end
 local dbg = {};
 for _, a in ipairs(alert.active) do dbg[#dbg+1] = a.text:GetText(); end
 ok(sawEnter and sawLeave, "test loop alternates both alerts constantly",
-    "texts=[" .. table.concat(dbg, "|") .. "] timers=" .. #env.timers);
+    "texts=[" .. table.concat(dbg, "|") .. "]");
+ok(maxLoop >= 2, "previews overlap: the next enters at 80% of the previous travel", maxLoop);
 
 -- both columns are always visible; unlink size via the link column
 ok(options.enterCol:IsShown() and options.leaveCol:IsShown(), "both alert columns visible");
@@ -260,23 +269,23 @@ env:FireEvent("PLAYER_ENTER_COMBAT");
 ok(approx(select(5, ALast():GetPoint(1)), db.region.y1 + ALast().text:GetStringHeight() / 2),
     "journey starts bound inside the moved band");
 env:AdvanceTime(2.5);
-env:TickAnims(); -- let the combat alert finish; the loop resumes after
+env:TickAnims(); -- let the combat alert finish
 
 -- ----------------------------------------------------------------------------
 -- Sim 8: closing the window cleans everything up
 -- ----------------------------------------------------------------------------
 out("\n== Sim 8: window close cleanup ==");
-local function anyTicker()
-    for _, f in ipairs(env.frames) do
-        if f.shown and f.scripts.OnUpdate and f ~= alert then return true; end
+local function PendingTimers()
+    local n = 0;
+    for _, t in ipairs(env.timers) do
+        if not t.cancelled then n = n + 1; end
     end
-    return false;
+    return n;
 end
-local wasLooping = anyTicker();
-ok(wasLooping, "loop is running while the window is open");
+ok(PendingTimers() > 0, "preview loop is scheduled while the window is open");
 options:Hide();
 (options:GetScript("OnHide") or function() end)(options);
-ok(not anyTicker(), "loop stops when the window closes");
+ok(PendingTimers() == 0, "loop timer is cancelled when the window closes");
 ok(not editor:IsShown(), "region editor closes with the window");
 ok(#alert.active == 0, "in-flight loop text despawns on close");
 

@@ -3,9 +3,6 @@
 -- Type /fca in game for the options window.
 
 local ADDON_NAME = "Floating_Combat_Alert"
-local VERSION = "0.6.1"
-
-local unpack = table.unpack or unpack -- Lua 5.1 (WoW) global vs 5.2+ table field
 
 -- every typeface family the game client ships (collected from the client's own
 -- font references); locale variants load only on matching clients, so the list
@@ -80,7 +77,7 @@ local db -- alias for the Floating_Combat_Alert SavedVariables table, set on ADD
 local REGION_MIN = 20 -- smallest allowed region, in yards
 
 local options, editor -- created below
-local RefreshAll, UpdatePreviewLoop, PumpLoop -- assigned below
+local RefreshAll, PumpLoop -- assigned below
 
 -- parse an AARRGGBB hex string into r, g, b in the 0-1 range
 local function HexToRGB(hex)
@@ -210,11 +207,31 @@ end
 local activeAlerts = {} -- in-flight alerts, in spawn order
 local alertPool = {} -- recycled hidden frames
 
+-- hidden named anchor: hosts the text measurers and the active list for tests
 local driver = CreateFrame("Frame", "FloatingCombatAlertFrame", UIParent)
 driver:SetFrameStrata("HIGH")
 driver:EnableMouse(false)
 driver:Hide()
-driver.active = activeAlerts -- exposed for tests/diagnostics
+driver.active = activeAlerts -- never reassigned; the list mutates in place
+
+-- stop, hide, pool and unregister one alert
+local function ReleaseAlert(a)
+	a.group:Stop()
+	a:Hide()
+	alertPool[#alertPool + 1] = a
+	for i, active in ipairs(activeAlerts) do
+		if active == a then
+			table.remove(activeAlerts, i)
+			break
+		end
+	end
+end
+
+-- seconds an in-flight alert has actually spent on its current timeline
+local function AlertElapsed(a)
+	local frac = a.group:IsPlaying() and a.group:GetProgress() or 0
+	return (a.doneT or 0) + frac * (a.spanT or 0)
+end
 
 -- per-side text measurers: the shared band width must fit whichever alert is
 -- currently the bigger one, so each side is measured with its own font/size
@@ -234,9 +251,6 @@ local function TextWidthFor(cfg)
 end
 
 local function StyleAlertText(fs, cfg)
-	if _G.FCA_TRACE then
-		_G.FCA_TRACE(("StyleAlertText fs=%s side-text=%s"):format(tostring(fs):gsub("table: 0x", ""), cfg.text))
-	end
 	fs:SetFont(cfg.font, cfg.size, FlagsString(cfg)) -- font first: SetText needs one
 	fs:SetText(cfg.text)
 	local r, g, b = HexToRGB(cfg.color)
@@ -244,53 +258,57 @@ local function StyleAlertText(fs, cfg)
 end
 
 -- timeline for one alert: waits fadeStart% of the duration, then a constant
--- linear fade reaching zero exactly at despawn (fadeStart 100 = never fades)
+-- linear fade reaching zero exactly at despawn (fadeStart 100 = never fades).
+-- `progress` is how far the alert already is (0 at spawn, its true position
+-- when settings change mid-flight): the frame stays where it is and only the
+-- remaining travel and the fade ramp from that point are scheduled -- nothing
+-- restarts. No negative start delays: the client clamps those to zero.
 local function ConfigureAlertAnimation(f, cfg, progress)
 	local duration = math.max(cfg.duration or 2, 0.05)
 	local fadeStart = math.max(0, math.min(100, cfg.fadeStart or 50)) / 100
 	local r = db.region
 	local down = cfg.direction == "down"
 	local h = f.text:GetStringHeight()
-	local fromX = r.cx
 	local fromY = down and (r.y2 - h / 2) or (r.y1 + h / 2)
 	local toY = down and (r.y1 + h / 2) or (r.y2 - h / 2)
 
-	-- resume at `progress`: place the frame on the path, then translate only
-	-- the remaining distance (a negative start delay skips elapsed time)
-	local toX = fromX
-	local curX = fromX
 	local curY = fromY + (toY - fromY) * progress
 	f:ClearAllPoints()
-	f:SetPoint("CENTER", UIParent, "CENTER", curX, curY)
+	f:SetPoint("CENTER", UIParent, "CENTER", r.cx, curY)
 
 	local g = f.group
 	g:Stop()
-	local skip = progress * duration
 
+	-- travel: the remaining distance over the remaining time (same speed)
 	local tr = f.translateAnim
 	tr:SetSmoothing("NONE")
-	tr:SetStartDelay(-skip)
-	tr:SetDuration(duration)
-	tr:SetOffset(toX - curX, toY - curY)
+	tr:SetStartDelay(0)
+	tr:SetDuration(math.max(duration * (1 - progress), 0.001))
+	tr:SetOffset(0, toY - curY)
 
+	-- fade: before fade-start, wait what is left of the wait; mid-fade,
+	-- continue the same linear ramp from the alpha the frame sits at
+	local fadeAt = fadeStart * duration
 	local al = f.alphaAnim
 	al:SetSmoothing("NONE")
-	al:SetFromAlpha(1)
-	al:SetToAlpha(fadeStart >= 1 and 1 or 0)
-	al:SetStartDelay(fadeStart * duration - skip)
-	al:SetDuration(math.max(duration - fadeStart * duration, 0.001))
-end
-
-local function ReleaseOldest()
-	local oldest = table.remove(activeAlerts, 1)
-	oldest.group:Stop()
-	oldest:Hide()
-	alertPool[#alertPool + 1] = oldest
+	if progress * duration <= fadeAt then
+		al:SetFromAlpha(1)
+		al:SetToAlpha(fadeStart >= 1 and 1 or 0)
+		al:SetStartDelay(fadeAt - progress * duration)
+		al:SetDuration(math.max(duration - fadeAt, 0.001))
+	else
+		local faded = (progress * duration - fadeAt) / math.max(duration - fadeAt, 0.001)
+		al:SetFromAlpha(1 - faded)
+		al:SetToAlpha(0)
+		al:SetStartDelay(0)
+		al:SetDuration(math.max((duration - fadeAt) * (1 - faded), 0.001))
+	end
+	return duration
 end
 
 local function SpawnAlert(which, fromLoop)
 	if #activeAlerts >= 8 then
-		ReleaseOldest() -- safety cap: recycle the oldest in-flight alert
+		ReleaseAlert(activeAlerts[1]) -- safety cap: recycle the oldest in-flight alert
 	end
 	local a = table.remove(alertPool) or CreateFrame("Frame", nil, UIParent)
 	a:SetFrameStrata("HIGH")
@@ -304,85 +322,59 @@ local function SpawnAlert(which, fromLoop)
 		a.alphaAnim = a.group:CreateAnimation("Alpha")
 		a.translateAnim = a.group:CreateAnimation("Translation")
 		a.group:SetScript("OnFinished", function()
-			a:Hide()
-			alertPool[#alertPool + 1] = a
-			for i, active in ipairs(activeAlerts) do
-				if active == a then
-					table.remove(activeAlerts, i)
-					break
-				end
-			end
-			PumpLoop() -- keep the preview loop (or its cleanup) going
+			ReleaseAlert(a)
 		end)
 	end
 	a.side = which
 	a.fromLoop = fromLoop and true or false
-	if _G.FCA_TRACE then
-		_G.FCA_TRACE(("SpawnAlert which=%s frame=%s"):format(which, tostring(a):gsub("table: 0x", "")))
-	end
-	a.duration = db[which].duration or 2
 	StyleAlertText(a.text, db[which])
-	ConfigureAlertAnimation(a, db[which], 0)
+	a:SetAlpha(1) -- the animation owns alpha from its first tick on
+	a.doneT, a.spanT = 0, ConfigureAlertAnimation(a, db[which], 0)
 	a.group:Play()
 	a:Show()
 	activeAlerts[#activeAlerts + 1] = a
 end
 
-
 local function ReleaseAllAlerts()
-	for _, a in ipairs(activeAlerts) do
-		a.group:Stop()
-		a:Hide()
-		alertPool[#alertPool + 1] = a
+	for i = #activeAlerts, 1, -1 do
+		ReleaseAlert(activeAlerts[i])
 	end
-	activeAlerts = {}
-	driver.active = activeAlerts
 end
 
 local function ReleaseLoopAlerts()
-	local kept = {}
-	for _, a in ipairs(activeAlerts) do
-		if a.fromLoop then
-			a.group:Stop()
-			a:Hide()
-			alertPool[#alertPool + 1] = a
-		else
-			kept[#kept + 1] = a
+	for i = #activeAlerts, 1, -1 do
+		if activeAlerts[i].fromLoop then
+			ReleaseAlert(activeAlerts[i])
 		end
 	end
-	activeAlerts = kept
-	driver.active = activeAlerts
 end
 
 -- ----------------------------------------------------------------------------
--- preview loop ("test messages constantly"), driven by timers -- no polling.
--- Waits while any alert is visible so previews never stack on top of each
--- other or on top of combat text.
+-- preview loop ("test messages constantly"), timer-driven: each preview
+-- enters while the previous one is at 80% of its travel, chaining the texts
+-- with a slight overlap instead of waiting for the band to empty
 -- ----------------------------------------------------------------------------
 local previewNext = "enter"
 local loopTimer = nil
 
-function PumpLoop() -- assigns the forward-declared upvalue
+function PumpLoop(delay) -- assigns the forward-declared upvalue
 	if loopTimer then
 		loopTimer:Cancel()
 		loopTimer = nil
 	end
-	if not (db and options and options:IsShown()) or #activeAlerts > 0 then
+	if not (db and options and options:IsShown()) then
 		return
 	end
-	loopTimer = C_Timer.NewTimer(0.4, function()
+	loopTimer = C_Timer.NewTimer(delay or 0.4, function()
 		loopTimer = nil
-		if not (db and options and options:IsShown()) or #activeAlerts > 0 then
+		if not (db and options and options:IsShown()) then
 			return
 		end
-		SpawnAlert(previewNext, true)
-		previewNext = (previewNext == "enter") and "leave" or "enter"
-		PumpLoop()
+		local which = previewNext
+		SpawnAlert(which, true)
+		previewNext = (which == "enter") and "leave" or "enter"
+		PumpLoop((db[which].duration or 2) * 0.8)
 	end)
-end
-
-function UpdatePreviewLoop()
-	PumpLoop()
 end
 
 -- stop the loop and despawn its text (combat text, if any, stays)
@@ -459,6 +451,33 @@ local function SetEdge(edge, y)
 	CommitRect(r)
 end
 
+-- drag steering: the OnUpdate script exists only while a drag is active, so
+-- an open editor costs nothing per-frame
+local function DragOnUpdate(self)
+	local drag = self.drag
+	if not drag then
+		return
+	end
+	local cx, cy = CursorXY()
+	local dx, dy = cx - drag.sx, cy - drag.sy
+	local o = drag.orig
+	if drag.edge then
+		SetEdge(drag.edge, drag.edge == "top" and o.y2 + dy or o.y1 + dy)
+	else
+		CommitRect({ cx = o.cx + dx, y1 = o.y1 + dy, y2 = o.y2 + dy })
+	end
+end
+
+local function DragStart(drag)
+	editor.drag = drag
+	editor:SetScript("OnUpdate", DragOnUpdate)
+end
+
+local function DragStop()
+	editor.drag = nil
+	editor:SetScript("OnUpdate", nil)
+end
+
 -- drag bars on the top/bottom edges: vertical resize only
 editor.edges = {}
 local function MakeEdgeHandle(edge)
@@ -471,12 +490,10 @@ local function MakeEdgeHandle(edge)
 	h:SetScript("OnMouseDown", function(_, btn)
 		if btn == "LeftButton" and db then
 			local cx, cy = CursorXY()
-			editor.drag = { edge = edge, sx = cx, sy = cy, orig = CopyRect() }
+			DragStart({ edge = edge, sx = cx, sy = cy, orig = CopyRect() })
 		end
 	end)
-	h:SetScript("OnMouseUp", function()
-		editor.drag = nil
-	end)
+	h:SetScript("OnMouseUp", DragStop)
 	editor.edges[edge] = h
 end
 
@@ -496,33 +513,14 @@ end
 editor.readouts.left = MakeReadout()
 editor.readouts.right = MakeReadout()
 
-editor.drag = nil
 editor:SetScript("OnDragStart", function()
 	if db then
 		local cx, cy = CursorXY()
-		editor.drag = { edge = nil, sx = cx, sy = cy, orig = CopyRect() }
+		DragStart({ edge = nil, sx = cx, sy = cy, orig = CopyRect() })
 	end
 end)
-editor:SetScript("OnDragStop", function()
-	editor.drag = nil
-end)
-editor:SetScript("OnMouseUp", function()
-	editor.drag = nil
-end)
-editor:SetScript("OnUpdate", function(self)
-	local drag = self.drag
-	if not drag then
-		return
-	end
-	local cx, cy = CursorXY()
-	local dx, dy = cx - drag.sx, cy - drag.sy
-	local o = drag.orig
-	if drag.edge then
-		SetEdge(drag.edge, drag.edge == "top" and o.y2 + dy or o.y1 + dy)
-	else
-		CommitRect({ cx = o.cx + dx, y1 = o.y1 + dy, y2 = o.y2 + dy })
-	end
-end)
+editor:SetScript("OnDragStop", DragStop)
+editor:SetScript("OnMouseUp", DragStop)
 
 -- place edges/boxes to the current band and mirror values into the boxes
 function editor:LayoutRegion()
@@ -549,10 +547,6 @@ end
 
 editor:SetScript("OnShow", function()
 	editor:LayoutRegion()
-	UpdatePreviewLoop()
-end)
-editor:SetScript("OnHide", function()
-	UpdatePreviewLoop()
 end)
 end
 
@@ -959,15 +953,25 @@ function RefreshAll()
 	options.leaveCol:Show()
 	options.enterCol.Refresh()
 	options.leaveCol.Refresh()
-	-- settings changed: restyle every in-flight alert immediately (timing
-	-- changes resume each animation at its current visual progress)
+	-- settings changed: restyle every in-flight alert immediately, resuming
+	-- from its current position and alpha -- nothing restarts, nothing jumps
+	local expired = {}
 	for _, a in ipairs(activeAlerts) do
 		local cfg = db[a.side]
 		StyleAlertText(a.text, cfg)
-		local elapsed = a.group:IsPlaying() and a.group:GetProgress() * (a.duration or 0) or 0
-		a.duration = cfg.duration or 2
-		ConfigureAlertAnimation(a, cfg, math.min(elapsed / a.duration, 1))
-		a.group:Play()
+		local oldDur = (a.doneT or 0) + (a.spanT or 0)
+		local progress = oldDur > 0 and math.min(AlertElapsed(a) / oldDur, 1) or 0
+		if progress >= 1 then
+			expired[#expired + 1] = a -- already outlived the new timeline
+		else
+			local duration = ConfigureAlertAnimation(a, cfg, progress)
+			a.doneT = progress * duration
+			a.spanT = duration - a.doneT
+			a.group:Play()
+		end
+	end
+	for i = 1, #expired do
+		ReleaseAlert(expired[i])
 	end
 	-- ... and keep the band hugging the text even while nothing is on screen
 	if editor and editor:IsShown() then
@@ -977,7 +981,7 @@ end
 
 options:SetScript("OnShow", function()
 	RefreshAll()
-	UpdatePreviewLoop()
+	PumpLoop()
 end)
 options:SetScript("OnHide", function()
 	-- closing the window stops the loop, despawns loop text and the editor
@@ -985,7 +989,6 @@ options:SetScript("OnHide", function()
 	if editor then
 		editor:Hide()
 	end
-	UpdatePreviewLoop()
 end)
 
 end
@@ -1047,7 +1050,6 @@ local function FCA_loaded(self, event, arg1)
 		end
 		options:ClearAllPoints()
 		options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
-		driver:Show() -- start the per-alert advance loop
 		-- the player unit's combat flag, not the regen lock (regen lags real
 		-- combat state and can keep running in combat, e.g. troll racial)
 		self:RegisterEvent("PLAYER_ENTER_COMBAT")
@@ -1056,7 +1058,6 @@ local function FCA_loaded(self, event, arg1)
 		if RefreshAll then
 			RefreshAll()
 		end
-		UpdatePreviewLoop()
 	elseif event == "PLAYER_ENTER_COMBAT" then
 		if inCombatKnown ~= true then
 			inCombatKnown = true
@@ -1082,7 +1083,7 @@ Fr_FloatingCombatAlert:SetScript("OnEvent", FCA_loaded)
 
 -- slash command functionality
 SLASH_FCA1 = "/fca"
-SlashCmdList.FCA = function(msg, editbox)
+SlashCmdList.FCA = function(msg)
 	if not db then
 		return
 	end
