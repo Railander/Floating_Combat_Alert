@@ -10,7 +10,6 @@
 --]]
 
 local env = dofile("../shared/wow_test_env.lua");
-_G.MOCK_DEBUG = true;
 local out = env.rawPrint;
 local ADDON = "Floating_Combat_Alert";
 
@@ -149,18 +148,18 @@ ok(options:IsShown(), "/fca opens the options window");
 -- combat text spawns fresh while the loop is running
 env.playerInCombat = false;
 env:FireEvent("UNIT_FLAGS", "player");
-env:AdvanceTime(2);
-env:TickAnims();
+env:Pump(3.5); -- outlast the leave text above; the loop spawns its first preview
 env.playerInCombat = true;
 env:FireEvent("UNIT_FLAGS", "player");
--- TODO: same known flaky issue as the alternation test above
--- (pump timer scheduling vs TickAnims in the mock)
-ok(#alert.active > 0 and AAlpha() >= 0, "real combat text state readable while the loop is running", AAlpha());
+ok(#alert.active >= 2 and AText() == db.enter.text,
+    "real combat text spawns beside in-flight loop text", ("count=%d"):format(ACount()));
+env:Pump(0.1);
+ok(AAlpha() > 0.9, "combat alert renders at full alpha while the loop runs", AAlpha());
+env:Pump(3);
 
 local sawEnter, sawLeave = false, false;
-for _ = 1, 30 do
-    env:AdvanceTime(0.25);
-env:TickAnims();
+for _ = 1, 36 do
+    env:Pump(0.25);
     if #alert.active > 0 then
         if AText() == db.enter.text then sawEnter = true; end
         if AText() == db.leave.text then sawLeave = true; end
@@ -168,14 +167,8 @@ env:TickAnims();
 end
 local dbg = {};
 for _, a in ipairs(alert.active) do dbg[#dbg+1] = a.text:GetText(); end
--- TODO: this test is flaky with the animation-driven engine (the mock's
--- timer + TickAnims interplay needs a dedicated pump driver).
--- The addon itself is verified by tests/test_fca.lua (152 tests).
--- KNOWN FLAKY: the mock's timer + TickAnims interplay needs a dedicated
--- pump driver; the addon logic is verified by test_fca.lua
--- ok(sawEnter and sawLeave, "test loop alternates both alerts constantly",
---     "count=" .. ACount() .. " texts=[" .. table.concat(dbg, "|") .. "] timers=" .. #env.timers);
-out("  SKIP: test loop alternation (flaky with animation-driven engine)");
+ok(sawEnter and sawLeave, "test loop alternates both alerts constantly",
+    "texts=[" .. table.concat(dbg, "|") .. "] timers=" .. #env.timers);
 
 -- both columns are always visible; unlink size via the link column
 ok(options.enterCol:IsShown() and options.leaveCol:IsShown(), "both alert columns visible");
