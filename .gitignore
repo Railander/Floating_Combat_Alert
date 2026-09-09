@@ -11,6 +11,6 @@ CF_API_KEY.txt
 secret*
 
 # large local reference dumps & tooling indexes
-BlizzardInterfaceCode/
-Source_UI_12.1/
+# (UI source dumps live at the workspace root, named Source_UI_<patch>/)
+Source_UI_*/
 .codegraph/
