@@ -294,7 +294,7 @@ ok(#alert.active == 0, "in-flight loop text despawns on close");
 -- ----------------------------------------------------------------------------
 out("\n== Sim 9: UI reload ==");
 local carried = {
-    x1 = db.region.x1, y1 = db.region.y1, y2 = db.region.y2,
+    cx = db.region.cx, y1 = db.region.y1, y2 = db.region.y2,
     enterSize = db.enter.size, leaveFont = db.leave.font,
     leaveSize = db.leave.size, leaveStyle = db.leave.outlineStyle,
     enterText = db.enter.text,
@@ -308,7 +308,7 @@ editor = env:FindFrame("FloatingCombatAlertRegionEditor");
 
 env:FireEvent("ADDON_LOADED", ADDON);
 local db2 = _G.Floating_Combat_Alert;
-ok(db2.region.x1 == carried.x1 and db2.region.y1 == carried.y1 and db2.region.y2 == carried.y2, "band survives reload");
+ok(db2.region.cx == carried.cx and db2.region.y1 == carried.y1 and db2.region.y2 == carried.y2, "band survives reload");
 ok(db2.enter.size == carried.enterSize and db2.leave.size == carried.leaveSize, "per-side sizes survive reload");
 ok(db2.leave.font == carried.leaveFont and db2.leave.outlineStyle == carried.leaveStyle, "per-side font/style survive reload");
 ok(db2.enter.text == carried.enterText, "custom text survives reload");
