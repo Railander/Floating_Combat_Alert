@@ -177,7 +177,7 @@ local dbg = {};
 for _, a in ipairs(alert.active) do dbg[#dbg+1] = a.text:GetText(); end
 ok(sawEnter and sawLeave, "test loop alternates both alerts constantly",
     "texts=[" .. table.concat(dbg, "|") .. "]");
-ok(maxLoop >= 2, "previews overlap: the next enters at 80% of the previous travel", maxLoop);
+ok(maxLoop >= 2, "previews overlap: the next enters at 50% of the previous travel", maxLoop);
 
 -- both columns are always visible; unlink size via the link column
 ok(options.enterCol:IsShown() and options.leaveCol:IsShown(), "both alert columns visible");

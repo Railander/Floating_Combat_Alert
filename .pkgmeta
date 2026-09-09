@@ -1,0 +1,8 @@
+package-as: Floating_Combat_Alert
+enable-nolib-creation: no
+
+ignore:
+    - LICENSE
+    - README.md
+    - .gitignore
+    - .gitattributes

@@ -351,8 +351,8 @@ end
 
 -- ----------------------------------------------------------------------------
 -- preview loop ("test messages constantly"), timer-driven: each preview
--- enters while the previous one is at 80% of its travel, chaining the texts
--- with a slight overlap instead of waiting for the band to empty
+-- enters while the previous one is halfway through its travel, chaining the
+-- texts with a slight overlap instead of waiting for the band to empty
 -- ----------------------------------------------------------------------------
 local previewNext = "enter"
 local loopTimer = nil
@@ -373,7 +373,7 @@ function PumpLoop(delay) -- assigns the forward-declared upvalue
 		local which = previewNext
 		SpawnAlert(which, true)
 		previewNext = (which == "enter") and "leave" or "enter"
-		PumpLoop((db[which].duration or 2) * 0.8)
+		PumpLoop((db[which].duration or 2) * 0.5)
 	end)
 end
 
