@@ -1,0 +1,16 @@
+# secrets / credentials
+CF_API_KEY.txt
+*.key
+*.pem
+*.pfx
+.env
+.env.*
+
+# tokens / secrets droppings
+*token*
+secret*
+
+# large local reference dumps & tooling indexes
+BlizzardInterfaceCode/
+Source_UI_12.1/
+.codegraph/
