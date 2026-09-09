@@ -1081,35 +1081,14 @@ Fr_FloatingCombatAlert:RegisterEvent("ADDON_LOADED")
 Fr_FloatingCombatAlert:RegisterEvent("PLAYER_ENTERING_WORLD")
 Fr_FloatingCombatAlert:SetScript("OnEvent", FCA_loaded)
 
--- slash command functionality
+-- slash command functionality: bare /fca (or anything unrecognized) toggles
+-- the options window, /fca reset restores every default
 SLASH_FCA1 = "/fca"
 SlashCmdList.FCA = function(msg)
 	if not db then
 		return
 	end
-	local duration = string.match(msg, "^duration (%d+%.?%d?)$")
-	local reset = string.match(msg, "^reset$")
-	local testIn = string.match(msg, "^test in$")
-	local testOut = string.match(msg, "^test out$")
-	local region = string.match(msg, "^region$")
-	if msg == "" or not (duration or reset or testIn or testOut or region) then
-		-- bare /fca (or anything unrecognized) toggles the options window
-		if options and options:IsShown() then
-			options:Hide()
-		elseif options then
-			options:Show()
-		end
-	elseif testIn then
-		SpawnAlert("enter")
-	elseif testOut then
-		SpawnAlert("leave")
-	elseif region then
-		if editor:IsShown() then
-			editor:Hide()
-		else
-			editor:Show()
-		end
-	elseif reset then
+	if string.match(msg, "^reset$") then
 		Floating_Combat_Alert = {}
 		db = Floating_Combat_Alert
 		MigrateLegacy(db)
@@ -1123,9 +1102,11 @@ SlashCmdList.FCA = function(msg)
 		end
 		options:ClearAllPoints()
 		options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
-	elseif duration then
-		local v = tonumber(duration)
-		db.enter.duration, db.leave.duration = v, v
-		SpawnAlert("enter")
+	else
+		if options and options:IsShown() then
+			options:Hide()
+		elseif options then
+			options:Show()
+		end
 	end
 end

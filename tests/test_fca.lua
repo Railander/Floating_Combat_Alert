@@ -502,10 +502,9 @@ options.enterCol.duration:SetText("1");
 options.enterCol.duration:GetScript("OnEnterPressed")(options.enterCol.duration);
 
 -- ----------------------------------------------------------------------------
--- Region band editor
+-- Region band editor (toggled by the options window's move-region button)
 -- ----------------------------------------------------------------------------
-slash("region");
-ok(editor:IsShown(), "/fca region opens the editor");
+editor:Show();
 (editor:GetScript("OnShow") or function() end)(editor);
 local rx1, ry1 = select(4, editor:GetPoint(1)), select(5, editor:GetPoint(1));
 ok(rx1 == editor:BandLeft() and ry1 == db.region.y1, "editor mirrors the saved band");
@@ -562,7 +561,9 @@ env:TickAnims();
 -- ----------------------------------------------------------------------------
 -- Closing the window cleans up
 -- ----------------------------------------------------------------------------
-slash("test in");
+SyncOutOfCombat(); -- a real combat alert is in flight across the close
+env.playerInCombat = true;
+env:FireEvent("UNIT_FLAGS", "player");
 env:AdvanceTime(0.2);
 slash("");
 fireHide(options);
@@ -592,12 +593,6 @@ for _ = 1, 60 do
     end
 end
 ok(despawnChecked, "closing the window despawns the in-flight loop text");
-
--- ----------------------------------------------------------------------------
--- Slash: duration
--- ----------------------------------------------------------------------------
-slash("duration 2.5");
-ok(db.enter.duration == 2.5 and db.leave.duration == 2.5, "/fca duration updates both sides");
 
 -- ----------------------------------------------------------------------------
 -- UI reload with the customized profile
