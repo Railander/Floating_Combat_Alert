@@ -5,11 +5,6 @@
 local ADDON_NAME = "Floating_Combat_Alert"
 local VERSION = "0.6.1"
 
--- ingame instructions colors
-local exitColor = "|r"
-local colorOrange = "|cFFDF9F1F"
-local colorRed = "|cFFFF3F1F"
-
 local unpack = table.unpack or unpack -- Lua 5.1 (WoW) global vs 5.2+ table field
 
 -- every typeface family the game client ships (collected from the client's own
@@ -85,18 +80,7 @@ local db -- alias for the Floating_Combat_Alert SavedVariables table, set on ADD
 local REGION_MIN = 20 -- smallest allowed region, in yards
 
 local options, editor -- created below
-local RefreshAll, UpdatePreviewLoop -- assigned below
-
-local function FCA_instructions()
-	print(colorOrange .. "Use /fca by itself to open the options window; or followed by: to preview the alerts; to adjust the travel region; display duration; to print saved config." .. exitColor)
-	print(colorOrange .. "Example:" .. exitColor .. " /fca")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca test in")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca test out")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca region")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca duration 1.5")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca print")
-	print(colorOrange .. "Example:" .. exitColor .. " /fca reset")
-end
+local RefreshAll, UpdatePreviewLoop, PumpLoop -- assigned below
 
 -- parse an AARRGGBB hex string into r, g, b in the 0-1 range
 local function HexToRGB(hex)
@@ -220,7 +204,8 @@ end
 
 -- ----------------------------------------------------------------------------
 -- alert engine: every message spawns its own frame, so concurrent combat
--- transitions float side by side instead of replacing each other
+-- transitions float side by side instead of replacing each other. Motion and
+-- fading run on engine AnimationGroups -- zero per-frame Lua work.
 -- ----------------------------------------------------------------------------
 local activeAlerts = {} -- in-flight alerts, in spawn order
 local alertPool = {} -- recycled hidden frames
@@ -248,135 +233,164 @@ local function TextWidthFor(cfg)
 	return m:GetStringWidth()
 end
 
--- fade lifecycle: fully opaque until the fade-start % of the duration, then a
--- constant fade reaching zero at despawn
-local function FadeAlpha(cfg, progress)
-	local fadeStart = math.max(0, math.min(100, cfg.fadeStart or 50)) / 100
-	if fadeStart >= 1 or progress <= fadeStart then
-		return 1
-	end
-	return 1 - (progress - fadeStart) / (1 - fadeStart)
-end
-
 local function StyleAlertText(fs, cfg)
+	if _G.FCA_TRACE then
+		_G.FCA_TRACE(("StyleAlertText fs=%s side-text=%s"):format(tostring(fs):gsub("table: 0x", ""), cfg.text))
+	end
 	fs:SetFont(cfg.font, cfg.size, FlagsString(cfg)) -- font first: SetText needs one
 	fs:SetText(cfg.text)
 	local r, g, b = HexToRGB(cfg.color)
 	fs:SetTextColor(r, g, b, 1)
 end
 
-local function PositionAlert(a, progress)
-	local cfg = db[a.side]
+-- timeline for one alert: waits fadeStart% of the duration, then a constant
+-- linear fade reaching zero exactly at despawn (fadeStart 100 = never fades)
+local function ConfigureAlertAnimation(f, cfg, progress)
+	local duration = math.max(cfg.duration or 2, 0.05)
+	local fadeStart = math.max(0, math.min(100, cfg.fadeStart or 50)) / 100
 	local r = db.region
-	local h = a.frame.text:GetStringHeight()
-	local span = math.max(0, r.y2 - r.y1 - h)
-	local cx = r.cx
-	local y = r.y1 + h / 2 + span * progress
-	if cfg.direction == "down" then
-		y = r.y2 - h / 2 - span * progress
-	end
-	a.frame:ClearAllPoints()
-	a.frame:SetPoint("CENTER", UIParent, "CENTER", cx, y)
+	local down = cfg.direction == "down"
+	local h = f.text:GetStringHeight()
+	local fromX = r.cx
+	local fromY = down and (r.y2 - h / 2) or (r.y1 + h / 2)
+	local toY = down and (r.y1 + h / 2) or (r.y2 - h / 2)
+
+	-- resume at `progress`: place the frame on the path, then translate only
+	-- the remaining distance (a negative start delay skips elapsed time)
+	local toX = fromX
+	local curX = fromX
+	local curY = fromY + (toY - fromY) * progress
+	f:ClearAllPoints()
+	f:SetPoint("CENTER", UIParent, "CENTER", curX, curY)
+
+	local g = f.group
+	g:Stop()
+	local skip = progress * duration
+
+	local tr = f.translateAnim
+	tr:SetSmoothing("NONE")
+	tr:SetStartDelay(-skip)
+	tr:SetDuration(duration)
+	tr:SetOffset(toX - curX, toY - curY)
+
+	local al = f.alphaAnim
+	al:SetSmoothing("NONE")
+	al:SetFromAlpha(1)
+	al:SetToAlpha(fadeStart >= 1 and 1 or 0)
+	al:SetStartDelay(fadeStart * duration - skip)
+	al:SetDuration(math.max(duration - fadeStart * duration, 0.001))
 end
 
-local function ReleaseAlert(index)
-	local a = activeAlerts[index]
-	a.frame.text:SetAlpha(1)
-	a.frame:Hide()
-	alertPool[#alertPool + 1] = a.frame
-	table.remove(activeAlerts, index)
+local function ReleaseOldest()
+	local oldest = table.remove(activeAlerts, 1)
+	oldest.group:Stop()
+	oldest:Hide()
+	alertPool[#alertPool + 1] = oldest
 end
 
 local function SpawnAlert(which, fromLoop)
 	if #activeAlerts >= 8 then
-		ReleaseAlert(1) -- safety cap: recycle the oldest in-flight alert
+		ReleaseOldest() -- safety cap: recycle the oldest in-flight alert
 	end
-	local frame = table.remove(alertPool) or CreateFrame("Frame", nil, UIParent)
-	frame:SetFrameStrata("HIGH")
-	frame:SetSize(1, 1)
-	frame:EnableMouse(false)
-	if not frame.text then
-		frame.text = frame:CreateFontString(nil, "OVERLAY")
-		frame.text:SetPoint("CENTER", frame, "CENTER", 0, 0)
-		frame.text:SetFont(defaults.enter.font, defaults.enter.size, FlagsString(defaults.enter))
+	local a = table.remove(alertPool) or CreateFrame("Frame", nil, UIParent)
+	a:SetFrameStrata("HIGH")
+	a:SetSize(1, 1)
+	a:EnableMouse(false)
+	if not a.text then
+		a.text = a:CreateFontString(nil, "OVERLAY")
+		a.text:SetPoint("CENTER", a, "CENTER", 0, 0)
+		a.text:SetFont(defaults.enter.font, defaults.enter.size, FlagsString(defaults.enter))
+		a.group = a:CreateAnimationGroup()
+		a.alphaAnim = a.group:CreateAnimation("Alpha")
+		a.translateAnim = a.group:CreateAnimation("Translation")
+		a.group:SetScript("OnFinished", function()
+			a:Hide()
+			alertPool[#alertPool + 1] = a
+			for i, active in ipairs(activeAlerts) do
+				if active == a then
+					table.remove(activeAlerts, i)
+					break
+				end
+			end
+			PumpLoop() -- keep the preview loop (or its cleanup) going
+		end)
 	end
-	StyleAlertText(frame.text, db[which])
-	frame.text:SetAlpha(1)
-	activeAlerts[#activeAlerts + 1] = {
-		frame = frame,
-		side = which,
-		elapsed = 0,
-		fromLoop = fromLoop and true or false,
-	}
-	PositionAlert(activeAlerts[#activeAlerts], 0)
-	frame:Show()
+	a.side = which
+	a.fromLoop = fromLoop and true or false
+	if _G.FCA_TRACE then
+		_G.FCA_TRACE(("SpawnAlert which=%s frame=%s"):format(which, tostring(a):gsub("table: 0x", "")))
+	end
+	a.duration = db[which].duration or 2
+	StyleAlertText(a.text, db[which])
+	ConfigureAlertAnimation(a, db[which], 0)
+	a.group:Play()
+	a:Show()
+	activeAlerts[#activeAlerts + 1] = a
 end
 
+
 local function ReleaseAllAlerts()
-	for i = #activeAlerts, 1, -1 do
-		ReleaseAlert(i)
+	for _, a in ipairs(activeAlerts) do
+		a.group:Stop()
+		a:Hide()
+		alertPool[#alertPool + 1] = a
 	end
+	activeAlerts = {}
+	driver.active = activeAlerts
 end
 
 local function ReleaseLoopAlerts()
-	for i = #activeAlerts, 1, -1 do
-		if activeAlerts[i].fromLoop then
-			ReleaseAlert(i)
+	local kept = {}
+	for _, a in ipairs(activeAlerts) do
+		if a.fromLoop then
+			a.group:Stop()
+			a:Hide()
+			alertPool[#alertPool + 1] = a
+		else
+			kept[#kept + 1] = a
 		end
 	end
+	activeAlerts = kept
+	driver.active = activeAlerts
 end
 
--- one driver advances every in-flight alert (OnUpdate only ticks while shown;
--- the driver is shown at login and simply idles when nothing is in flight)
-driver:SetScript("OnUpdate", function(_, dt)
-	for i = #activeAlerts, 1, -1 do
-		local a = activeAlerts[i]
-		local cfg = db[a.side]
-		a.elapsed = a.elapsed + dt
-		if a.elapsed >= cfg.duration then
-			ReleaseAlert(i)
-		else
-			local progress = a.elapsed / cfg.duration
-			a.frame.text:SetAlpha(FadeAlpha(cfg, progress))
-			PositionAlert(a, progress)
-		end
-	end
-end)
-
 -- ----------------------------------------------------------------------------
--- preview loop ("test messages constantly"); waits while any alert is visible
--- so previews never stack on top of each other or on top of combat text
+-- preview loop ("test messages constantly"), driven by timers -- no polling.
+-- Waits while any alert is visible so previews never stack on top of each
+-- other or on top of combat text.
 -- ----------------------------------------------------------------------------
-local previewTicker = CreateFrame("Frame")
-previewTicker:Hide()
-local previewAcc = 0
 local previewNext = "enter"
-previewTicker:SetScript("OnUpdate", function(_, dt)
-	if #activeAlerts > 0 then
-		previewAcc = 0
+local loopTimer = nil
+
+function PumpLoop() -- assigns the forward-declared upvalue
+	if loopTimer then
+		loopTimer:Cancel()
+		loopTimer = nil
+	end
+	if not (db and options and options:IsShown()) or #activeAlerts > 0 then
 		return
 	end
-	previewAcc = previewAcc + dt
-	if previewAcc >= 0.4 then
-		previewAcc = 0
+	loopTimer = C_Timer.NewTimer(0.4, function()
+		loopTimer = nil
+		if not (db and options and options:IsShown()) or #activeAlerts > 0 then
+			return
+		end
 		SpawnAlert(previewNext, true)
 		previewNext = (previewNext == "enter") and "leave" or "enter"
-	end
-end)
+		PumpLoop()
+	end)
+end
 
 function UpdatePreviewLoop()
-	if db ~= nil and options ~= nil and options:IsShown() then
-		previewTicker:Show()
-	else
-		previewTicker:Hide()
-		previewAcc = 0
-	end
+	PumpLoop()
 end
 
 -- stop the loop and despawn its text (combat text, if any, stays)
 local function StopLoopAndDespawn()
-	previewTicker:Hide()
-	previewAcc = 0
+	if loopTimer then
+		loopTimer:Cancel()
+		loopTimer = nil
+	end
 	ReleaseLoopAlerts()
 end
 
@@ -945,13 +959,15 @@ function RefreshAll()
 	options.leaveCol:Show()
 	options.enterCol.Refresh()
 	options.leaveCol.Refresh()
-	-- settings changed: restyle every in-flight alert immediately
+	-- settings changed: restyle every in-flight alert immediately (timing
+	-- changes resume each animation at its current visual progress)
 	for _, a in ipairs(activeAlerts) do
 		local cfg = db[a.side]
-		local progress = math.min(a.elapsed / cfg.duration, 1)
-		StyleAlertText(a.frame.text, cfg)
-		a.frame.text:SetAlpha(FadeAlpha(cfg, progress))
-		PositionAlert(a, progress)
+		StyleAlertText(a.text, cfg)
+		local elapsed = a.group:IsPlaying() and a.group:GetProgress() * (a.duration or 0) or 0
+		a.duration = cfg.duration or 2
+		ConfigureAlertAnimation(a, cfg, math.min(elapsed / a.duration, 1))
+		a.group:Play()
 	end
 	-- ... and keep the band hugging the text even while nothing is on screen
 	if editor and editor:IsShown() then
@@ -975,17 +991,12 @@ end)
 end
 
 -- build the UI last and defensively: even if a widget template is missing in
--- some client flavor, the combat alerts and /fca print keep working
-local buildErr = nil
-local buildOK, buildFail = pcall(function()
+-- some client flavor, the combat alerts keep working
+pcall(function()
 	EnsureMenuUtil()
 	BuildRegionEditor()
 	BuildOptionsWindow()
 end)
-if not buildOK then
-	buildErr = buildFail
-	print(colorRed .. "Floating Combat Alert: options UI failed to build, combat alerts still work. Error: " .. tostring(buildFail) .. exitColor)
-end
 
 -- ----------------------------------------------------------------------------
 -- login and persist through sessions functionality
@@ -1066,26 +1077,13 @@ end
 -- event triggers
 local Fr_FloatingCombatAlert = CreateFrame("Frame")
 Fr_FloatingCombatAlert:RegisterEvent("ADDON_LOADED")
-Fr_FloatingCombatAlert:RegisterEvent("PLAYER_LOGIN")
 Fr_FloatingCombatAlert:RegisterEvent("PLAYER_ENTERING_WORLD")
-Fr_FloatingCombatAlert:SetScript("OnEvent", function(self, event, arg1)
-	if event == "PLAYER_LOGIN" then
-		-- chat is guaranteed visible here; this line proves the addon file ran
-		if buildErr then
-			print(colorRed .. "[Floating Combat Alert] " .. VERSION .. " loaded, options UI failed: " .. tostring(buildErr) .. exitColor)
-		else
-			print(colorOrange .. "[Floating Combat Alert] " .. VERSION .. " loaded, type /fca for options" .. exitColor)
-		end
-		return
-	end
-	FCA_loaded(self, event, arg1)
-end)
+Fr_FloatingCombatAlert:SetScript("OnEvent", FCA_loaded)
 
 -- slash command functionality
 SLASH_FCA1 = "/fca"
 SlashCmdList.FCA = function(msg, editbox)
 	if not db then
-		print(colorRed .. "Floating Combat Alert is not fully loaded yet." .. exitColor)
 		return
 	end
 	local duration = string.match(msg, "^duration (%d+%.?%d?)$")
@@ -1093,32 +1091,22 @@ SlashCmdList.FCA = function(msg, editbox)
 	local testIn = string.match(msg, "^test in$")
 	local testOut = string.match(msg, "^test out$")
 	local region = string.match(msg, "^region$")
-	local printCfg = string.match(msg, "^print$")
-	if msg == "" then
-		if options then
-			if options:IsShown() then
-				options:Hide()
-				print(colorOrange .. "[FCA] window closed" .. exitColor)
-			else
-				options:Show()
-				print(colorOrange .. "[FCA] window opened" .. exitColor)
-			end
-		else
-			print(colorRed .. "Options window failed to build; combat alerts still work. Type /fca print for config." .. exitColor)
+	if msg == "" or not (duration or reset or testIn or testOut or region) then
+		-- bare /fca (or anything unrecognized) toggles the options window
+		if options and options:IsShown() then
+			options:Hide()
+		elseif options then
+			options:Show()
 		end
 	elseif testIn then
 		SpawnAlert("enter")
 	elseif testOut then
 		SpawnAlert("leave")
 	elseif region then
-		if editor then
-			if editor:IsShown() then
-				editor:Hide()
-			else
-				editor:Show()
-			end
+		if editor:IsShown() then
+			editor:Hide()
 		else
-			print(colorRed .. "Region editor failed to build; combat alerts still work." .. exitColor)
+			editor:Show()
 		end
 	elseif reset then
 		Floating_Combat_Alert = {}
@@ -1134,21 +1122,9 @@ SlashCmdList.FCA = function(msg, editbox)
 		end
 		options:ClearAllPoints()
 		options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
-		print(colorOrange .. "[FCA] all settings restored to defaults" .. exitColor)
 	elseif duration then
 		local v = tonumber(duration)
 		db.enter.duration, db.leave.duration = v, v
 		SpawnAlert("enter")
-	elseif printCfg then
-		local r = db.region
-		print(colorOrange .. "Region: " .. exitColor .. ("left=%s right=%s bottom=%s top=%s"):format(tostring(editor:BandLeft()), tostring(editor:BandRight()), tostring(r.y1), tostring(r.y2)))
-		print(colorOrange .. "Window: " .. exitColor .. ("x=%s y=%s"):format(tostring(db.win.x), tostring(db.win.y)))
-		for _, which in ipairs({ "enter", "leave" }) do
-			local c = db[which]
-			print(colorOrange .. c.text .. ": " .. exitColor .. ("%s, size %s, %s, outline %s, %s, duration %ss, fade start %s%%, flags [%s]"):format(FontNameFor(c.font), tostring(c.size), c.color, tostring(c.outlineStyle), tostring(c.direction), tostring(c.duration), tostring(c.fadeStart), tostring(FlagsString(c))))
-		end
-	else
-		print(colorRed .. "Incorrect use of" .. exitColor .. " /fca")
-		FCA_instructions()
 	end
 end
