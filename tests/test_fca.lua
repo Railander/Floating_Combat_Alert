@@ -66,7 +66,7 @@ do
             if not seen[tmpl] then
                 seen[tmpl] = true;
                 local ok51, hit = pcall(function()
-                    local p = io.popen(("grep -rl 'name=\"%s\"' ../Source_UI_12.1/Interface/AddOns 2>/dev/null | head -1"):format(tmpl));
+                    local p = io.popen(("grep -rl 'name=\"%s\"' ../WoW_UI_Source/12.1/Interface/AddOns 2>/dev/null | head -1"):format(tmpl));
                     local line = p and p:read("*l");
                     if p then p:close(); end
                     return line;
