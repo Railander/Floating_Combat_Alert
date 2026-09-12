@@ -1,26 +1,31 @@
 # Floating Combat Alert
 
-A super lightweight World of Warcraft addon that shows floating text when you enter or leave combat.
+A super lightweight World of Warcraft addon that shows floating text when you enter or leave combat. Type `/fca` in chat to open the configuration window.
 
 ![preview](preview.gif)
 
-Configurations include:
+## Commands
 
-* Font
-* Text size
-* Text outline
-* Text speed
-* Text movement direction
-* Text fading out
-* Text area size
-* Text color
+- `/fca` — open the configuration window
+- `/fca reset` — restore default settings
 
-## Usage
+Any other input opens the window as well.
 
-`/fca` for configuration window.
+## The config window
 
-`/fca reset` to restore default settings.
+- **move region** — show the travel region editor, then drag it anywhere or drag its top/bottom edges to resize it; the region always hugs the text width. Closing the window hides the editor.
+- **Link** — when checked, that row edits both alerts together; unchecked edits Entering and Leaving separately
+- **Font / Size / Color / Outline** — the look of each alert's text
+- **Text** — the words each alert shows
+- **Direction** — whether the text travels up or down
+- **Duration** — seconds between spawning and despawning
+- **Fade start** — percent of the duration at which fading out starts
+- While the window is open, sample messages keep flying so you can tune the settings while watching.
 
 ## Compatibility
 
-WoW Midnight (12.x).
+Works on Modern (retail / Midnight).
+
+## Links
+
+- [Changelog](CHANGELOG.md)

@@ -32,10 +32,6 @@ do
 		FONT_LIST[1] = FONT_CANDIDATES[1] -- Friz Quadrata ships with every client
 	end
 end
-local FONT_MENU = {}
-for i, e in ipairs(FONT_LIST) do
-	FONT_MENU[i] = { e.text, e.path }
-end
 local OUTLINE_MENU = {
 	{ text = "None", style = "none" },
 	{ text = "Thin", style = "outline" },
@@ -942,7 +938,7 @@ options.divider:SetPoint("LEFT", options, "LEFT", 12, 0)
 options.divider:SetPoint("RIGHT", options, "RIGHT", -12, 0)
 options.divider:SetPoint("TOP", options.enterCol.outline, "BOTTOM", 0, -7)
 
-function RefreshAll()
+function RefreshAll() -- assigns the forward-declared upvalue (see PumpLoop)
 	if not db or not options.enterCol then
 		return
 	end
@@ -1004,6 +1000,20 @@ end)
 -- ----------------------------------------------------------------------------
 -- login and persist through sessions functionality
 -- ----------------------------------------------------------------------------
+-- Midnight (12.x) gate discipline: there is none. Every op below just attempts.
+-- Enforcement is object-driven, not flag-driven: tainted calls on secret-clean
+-- objects serve under any restriction state, and nothing here can become
+-- secret-marked -- the addon ingests no unit/combat/aura data, only the boolean
+-- combat flag (a control signal, never stored into frames or passed to gated
+-- APIs), and renders user-configured text on its own frames. If the engine ever
+-- refuses, it errors LOUDLY (Bugsack, not silence): a silent queue would hide
+-- the bug, an error gets reported and fixed. The only guards left are
+-- crash-safety (nil options when the defensive UI build failed) and correctness
+-- (first-sync adopts silently, expired timelines release). No restriction or
+-- regen events installed: combat transitions need nothing beyond the
+-- player-unit events below. The single Blizzard-shared touch (ColorPickerFrame
+-- strata while picking) is idempotent and live-verified mid-combat on clean
+-- chrome. Classic flavors run the same code: no gate system there at all.
 local inCombatKnown = nil
 
 -- player-unit combat flag polling via UNIT_FLAGS; the dedicated
@@ -1028,10 +1038,10 @@ end
 
 local function FCA_loaded(self, event, arg1)
 	if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
-		if type(Floating_Combat_Alert) ~= "table" then
-			Floating_Combat_Alert = {}
+		if type(_G[ADDON_NAME]) ~= "table" then
+			_G[ADDON_NAME] = {}
 		end
-		db = Floating_Combat_Alert
+		db = _G[ADDON_NAME]
 		MigrateLegacy(db)
 		MergeDefaults(db, defaults)
 		-- a saved font can point at a file this client doesn't ship (or one that
@@ -1048,8 +1058,10 @@ local function FCA_loaded(self, event, arg1)
 				db[side].font = defaults.enter.font
 			end
 		end
-		options:ClearAllPoints()
-		options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
+		if options then -- the defensive UI build may have failed; alerts stand alone
+			options:ClearAllPoints()
+			options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
+		end
 		-- the player unit's combat flag, not the regen lock (regen lags real
 		-- combat state and can keep running in combat, e.g. troll racial)
 		self:RegisterEvent("PLAYER_ENTER_COMBAT")
@@ -1089,8 +1101,16 @@ SlashCmdList.FCA = function(msg)
 		return
 	end
 	if string.match(msg, "^reset$") then
-		Floating_Combat_Alert = {}
-		db = Floating_Combat_Alert
+		local sv = _G[ADDON_NAME]
+		if type(sv) ~= "table" then
+			sv = {}
+			_G[ADDON_NAME] = sv
+		else
+			for k in pairs(sv) do -- wipe in place: db aliases elsewhere stay valid
+				sv[k] = nil
+			end
+		end
+		db = sv
 		MigrateLegacy(db)
 		MergeDefaults(db, defaults)
 		ReleaseAllAlerts()
@@ -1100,8 +1120,10 @@ SlashCmdList.FCA = function(msg)
 		if editor and editor:IsShown() then
 			editor:LayoutRegion()
 		end
-		options:ClearAllPoints()
-		options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
+		if options then
+			options:ClearAllPoints()
+			options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
+		end
 	else
 		if options and options:IsShown() then
 			options:Hide()

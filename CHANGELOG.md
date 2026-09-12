@@ -1,3 +1,8 @@
+# v1.0.1 (2026-09-12)
+
+- Everything keeps working while fighting: entering/leaving combat alerts, every options-window setting, the travel region editor, the color picker and `/fca reset` all behave normally mid-combat and in Mythic+ / rated PvP, with no errors.
+- Existing settings carry over automatically.
+
 # v1.0.0 (2026-09-09)
 
 - First release.
