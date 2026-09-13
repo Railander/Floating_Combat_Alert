@@ -2,7 +2,7 @@
 
 Super lightweight addon that shows floating text when you enter or leave combat. Type `/fca` in chat to open the configuration window.
 
-![preview](preview.gif)
+![preview](https://i.imgur.com/Je3VEQ4.gif)
 
 ## Commands
 
