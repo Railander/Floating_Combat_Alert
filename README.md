@@ -24,6 +24,7 @@ Any other input opens the window as well.
 
 ## Compatibility
 
+- World of Warcraft: Forever (1.60.1)
 - World of Warcraft: Midnight (12.1.0)
 
 ## Links

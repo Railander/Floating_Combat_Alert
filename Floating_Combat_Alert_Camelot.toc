@@ -1,0 +1,10 @@
+## Interface: 16001
+## Version: @project-version@
+## Title: Floating Combat Alert
+## Notes: Super lightweight addon that shows floating text when you enter or leave combat, type /fca for options.
+## Author: railander
+## IconTexture: 1100022
+## X-Curse-Project-ID: 1689057
+## SavedVariables: Floating_Combat_Alert
+
+Floating_Combat_Alert.lua

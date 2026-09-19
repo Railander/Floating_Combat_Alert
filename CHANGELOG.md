@@ -1,5 +1,9 @@
 # Floating Combat Alert Changelog
 
+## v1.1.0 (2026-09-19)
+
+- The addon now works in World of Warcraft: Forever (beta).
+
 ## v1.0.1 (2026-09-12)
 
 - Everything keeps working while fighting: entering/leaving combat alerts, every options-window setting, the travel region editor, the color picker and `/fca reset` all behave normally mid-combat and in Mythic+ / rated PvP, with no errors.
