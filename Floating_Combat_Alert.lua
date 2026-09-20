@@ -9,12 +9,12 @@ local ADDON_NAME = "Floating_Combat_Alert"
 -- is validated at startup and only working entries reach the dropdown
 local FONT_CANDIDATES = {
 	{ text = "Friz Quadrata", path = "Fonts\\FRIZQT__.TTF" },
-	{ text = "Friz Quadrata (Cyrillic)", path = "Fonts\\FRIZQT___CYR.TTF" },
+	{ text = "Friz Quadrata Cyrillic", path = "Fonts\\FRIZQT___CYR.TTF" },
 	{ text = "Arial Narrow", path = "Fonts\\ARIALN.TTF" },
 	{ text = "Morpheus", path = "Fonts\\MORPHEUS.TTF" },
-	{ text = "Morpheus (Cyrillic)", path = "Fonts\\MORPHEUS_CYR.TTF" },
+	{ text = "Morpheus Cyrillic", path = "Fonts\\MORPHEUS_CYR.TTF" },
 	{ text = "Skurri", path = "Fonts\\SKURRI.TTF" },
-	{ text = "Skurri (Cyrillic)", path = "Fonts\\SKURRI_CYR.TTF" },
+	{ text = "Skurri Cyrillic", path = "Fonts\\SKURRI_CYR.TTF" },
 }
 local FONT_LIST = {}
 do
@@ -396,20 +396,17 @@ end
 -- Built inside a function so a failure here can never take down the alerts.
 -- ----------------------------------------------------------------------------
 local function BuildRegionEditor()
-editor = CreateFrame("Frame", "FloatingCombatAlertRegionEditor", UIParent, "BackdropTemplate")
+editor = CreateFrame("Frame", "FloatingCombatAlertRegionEditor", UIParent)
 editor:SetFrameStrata("TOOLTIP")
 editor:SetMovable(true)
 editor:EnableMouse(true)
 editor:RegisterForDrag("LeftButton")
 editor:SetClampedToScreen(true)
-editor:SetBackdrop({
-	bgFile = "Interface\\Buttons\\WHITE8X8",
-	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	edgeSize = 16,
-	insets = { left = 2, right = 2, top = 2, bottom = 2 },
-})
-editor:SetBackdropColor(1, 1, 1, 0.12)
-editor:SetBackdropBorderColor(1, 0.87, 0.12, 0.9)
+-- MRM move-box pattern: plain frame + BACKGROUND texture, no BackdropTemplate
+-- border. Yellow 50% zone fill; green edge handles below stay untouched.
+local zoneTex = editor:CreateTexture(nil, "BACKGROUND")
+zoneTex:SetColorTexture(1, 1, 0, 0.5)
+zoneTex:SetAllPoints()
 editor:Hide()
 
 -- the band's horizontal extent always hugs the text so it fits snugly,
@@ -563,6 +560,111 @@ end
 -- ----------------------------------------------------------------------------
 local colorPickerDragSetup = false
 
+-- config-window geometry (MRM lessons): uniform 12px label-above-control
+-- gap, uniform 8px inter-row gap, two-column block centered via the layout
+-- pass below. TextBox frames sit FCA_TEXT_SHIFT right of the dropdowns'
+-- edge: frames may agree while visible art disagrees (dropdown background
+-- vs InputBox caps), and live the dropdowns read right of the boxes.
+-- Paint-measured, one number, live-tuned. Fractional values are legal
+-- (float32 layout): the reporter's screen pixels run ~2x stored units, so
+-- all Paint numbers arrive halved. The long text box keeps its right edge
+-- shared and shortens from the left instead, plus a half-px grow right
+-- past that edge (enlarge, not move, per live order).
+local FCA_TEXT_SHIFT = 4.5
+local FCA_TEXT_GROW = 0.5
+local FCA_LINK_GAP = 12
+local FCA_COL_GAP = 12
+local FCA_LINK_W = 22
+-- EditBox text insets stay left/right SYMMETRIC everywhere (10/10 numeric,
+-- 6/6 text): SetJustifyH("CENTER") centers the text field, so any asymmetry
+-- visibly shifts the text off the box's middle while typing.
+-- dropdown chrome: historic pad, used only where the template interiors
+-- are unavailable (mock client); live buttons measure their own arrow
+local FCA_DROPDOWN_PAD = 40
+local FCA_LABEL_BASE = 12 -- GameFontHighlight (dropdown template Text), Fonts.xml:275-284
+local FCA_TEXT_BASE = 10 -- GameFontHighlightSmall (all EditBoxes), Fonts.xml:39-46
+-- Friz ships with every client (same file the template resolves to); the
+-- literal covers fontless harnesses where the global is absent
+local FCA_TEXT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
+local FCA_TEXT_MIN = 7
+
+-- text budget for a dropdown button: the template's label field runs from
+-- +8 to the arrow's left edge (arrow RIGHT-anchored at +1), so the budget
+-- is that span: W - 7 - arrowW. Arrow width is measured live (atlas DB is
+-- C-side); without template interiors, the historic pad.
+local function FCA_DropdownBudget(button)
+	local w = (button.GetWidth and button:GetWidth()) or 126
+	local arrow = button.Arrow
+	if not (arrow and arrow.GetWidth) then
+		return w - FCA_DROPDOWN_PAD
+	end
+	local arrowW = arrow:GetWidth() or 27
+	if arrowW <= 0 then
+		arrowW = 27
+	end
+	local avail = w - 7 - arrowW
+	if avail < 20 then
+		avail = 20
+	end
+	return avail
+end
+
+-- shrink a dropdown's selected label until it fits the button's text area.
+-- Long family names (e.g. "Friz Quadrata Cyrillic") overflow at the base
+-- size; stepping down keeps them visible instead of clipped by the arrow.
+-- Always starts from the base size, so a shorter pick grows back. Template
+-- geometry stands untouched (re-anchoring the field broke vertical
+-- rendering live); only the size adapts. No-op where the template exposes
+-- no label (mock client).
+local function FCA_FitDropdownText(button, fontPath, baseSize)
+	local label = button and button.Text
+	if not button or not label or not label.SetFont or not label.GetStringWidth then
+		return
+	end
+	local avail = FCA_DropdownBudget(button)
+	local size = baseSize or FCA_LABEL_BASE
+	label:SetFont(fontPath, size, "")
+	while (label:GetStringWidth() or 0) > avail and size > FCA_TEXT_MIN do
+		size = size - 1
+		label:SetFont(fontPath, size, "")
+	end
+end
+
+-- shrink an EditBox's text until it fits the box's visible text area.
+-- Explicit base (FCA_TEXT_FONT at FCA_TEXT_BASE, same Friz face the
+-- template resolves to) with the live size tracked on the box: never
+-- resolves the template object through GetFont, whose behavior after only
+-- SetFontObject is promised nowhere. Grows back from base every run, so
+-- shorter text restores. No-op where the client exposes no font surface.
+local function FCA_FitTextBox(box)
+	if not (box and box.SetFont and box.GetText and box.GetWidth) then
+		return
+	end
+	if not (options and options.CreateFontString) then
+		return
+	end
+	local scratch = options.FCA_scratch
+	if not scratch then
+		scratch = options:CreateFontString(nil, "OVERLAY")
+		options.FCA_scratch = scratch
+	end
+	if not (scratch and scratch.SetFont and scratch.SetText and scratch.GetStringWidth) then
+		return
+	end
+	local avail = box:GetWidth() - (box.FCA_pad or 20) -- left+right text insets
+	local size = FCA_TEXT_BASE
+	scratch:SetFont(FCA_TEXT_FONT, size, "")
+	scratch:SetText(box:GetText() or "")
+	while (scratch:GetStringWidth() or 0) > avail and size > FCA_TEXT_MIN do
+		size = size - 1
+		scratch:SetFont(FCA_TEXT_FONT, size, "")
+	end
+	if (box.FCA_size or FCA_TEXT_BASE) ~= size then
+		box.FCA_size = size
+		box:SetFont(FCA_TEXT_FONT, size, "")
+	end
+end
+
 local function BuildOptionsWindow()
 options = CreateFrame("Frame", "FloatingCombatAlertOptions", UIParent, "BackdropTemplate")
 options:SetFrameStrata("HIGH")
@@ -618,20 +720,25 @@ options.regionBtn:SetScript("OnClick", function()
 	end
 end)
 
--- link column: one checkbox per option row, left of both alert columns
-local LINK_ROWS = { font = -92, size = -134, color = -164, outline = -210, text = -252, direction = -292, duration = -334, fade = -376 }
+-- link column: one checkbox per option row, left of both alert columns.
+-- Positions are structural (layout pass centers each check on its row's
+-- control), so adding or moving a row can never drift the checks.
+local LINK_KEYS = { "font", "size", "color", "outline", "text", "direction", "duration", "fade" }
+-- enter-column control per link key (swatch/textBox names differ from keys)
+local LINK_CONTROLS = { font = "font", size = "size", color = "swatch", outline = "outline", text = "textBox", direction = "direction", duration = "duration", fade = "fade" }
 options.linkChecks = {}
 local checkCount = 0
-for key, rowY in pairs(LINK_ROWS) do
+for _, key in ipairs(LINK_KEYS) do
 	checkCount = checkCount + 1
+	local linkKey = key
 	local cb = CreateFrame("CheckButton", "FCALink" .. checkCount, options, "UICheckButtonTemplate")
-	cb:SetSize(22, 22)
-	cb:SetPoint("TOPLEFT", options, "TOPLEFT", 14, rowY)
+	cb:SetSize(FCA_LINK_W, FCA_LINK_W)
+	cb:SetPoint("TOPLEFT", options, "TOPLEFT", 14, -92)
 	cb:SetScript("OnClick", function(self)
 		if not db then
 			return
 		end
-		db.link[key] = self:GetChecked()
+		db.link[linkKey] = self:GetChecked()
 		RefreshAll()
 	end)
 	options.linkChecks[key] = cb
@@ -639,7 +746,7 @@ end
 options.linkTitle = options:CreateFontString(nil, "OVERLAY")
 options.linkTitle:SetFontObject("GameFontNormalSmall")
 options.linkTitle:SetText("Link")
-options.linkTitle:SetPoint("TOPLEFT", options, "TOPLEFT", 18, -66)
+options.linkTitle:SetPoint("TOP", options, "TOPLEFT", 14 + FCA_LINK_W / 2, -66)
 
 -- one control column per alert side
 local function MakeColumn(which, x)
@@ -650,9 +757,15 @@ local function MakeColumn(which, x)
 	col.title = col:CreateFontString(nil, "OVERLAY")
 	col.title:SetFontObject("GameFontHighlightSmall")
 	col.title:SetText((which == "enter") and "Entering" or "Leaving")
-	col.title:SetPoint("TOPLEFT", col, "TOPLEFT", 2, 0)
+	-- header row: raised to sit next to the Link label (-66 window),
+	-- centered over the column like the Link label sits over its checks
+	col.title:SetPoint("TOP", col, "TOPLEFT", 63, 10)
 
 	-- font dropdown: real dropdown widget, its label rendered in the picked font
+	col.fontLabel = col:CreateFontString(nil, "OVERLAY")
+	col.fontLabel:SetFontObject("GameFontNormalSmall")
+	col.fontLabel:SetText("Font")
+	col.fontLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -4)
 	col.font = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
 	col.font:SetSize(126, 22)
 	col.font:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -16)
@@ -674,18 +787,28 @@ local function MakeColumn(which, x)
 				end,
 				e.path
 			)
+			-- entries stay in the menu font on purpose: the menu compositor
+			-- wraps every entry region in a secure proxy whose metatable
+			-- asserts on SetFont (Blizzard_Menu/Compositor.lua), so per-entry
+			-- typefaces error loudly in game (Bugsack 3x/7x on open). The
+			-- picked typeface still previews on the dropdown button itself.
 		end
 	end)
 
-	-- size: numeric text box, type any value and press enter
+	-- size: numeric text box, type any value and press enter. Shifted right
+	-- with the other text boxes to meet the dropdowns' visible edge (see
+	-- the geometry note above). Labels share one left edge at x=2, all rows.
 	col.sizeLabel = col:CreateFontString(nil, "OVERLAY")
 	col.sizeLabel:SetFontObject("GameFontNormalSmall")
 	col.sizeLabel:SetText("Size")
-	col.sizeLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -44)
+	col.sizeLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -46)
 	col.size = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
 	col.size:SetSize(56, 20)
-	col.size:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -58)
+	col.size:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -58)
 	col.size:SetFontObject("GameFontHighlightSmall")
+	if col.size.SetTextInsets then
+		col.size:SetTextInsets(10, 10, 2, 2)
+	end
 	col.size:SetAutoFocus(false)
 	col.size:SetMaxLetters(4)
 	col.size:SetJustifyH("CENTER")
@@ -709,7 +832,7 @@ local function MakeColumn(which, x)
 	-- color
 	col.swatch = CreateFrame("Button", nil, col)
 	col.swatch:SetSize(26, 26)
-	col.swatch:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -88)
+	col.swatch:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -86)
 	col.swatch.tex = col.swatch:CreateTexture(nil, "OVERLAY")
 	col.swatch.tex:SetAllPoints(col.swatch)
 	col.swatch.label = col:CreateFontString(nil, "OVERLAY")
@@ -758,10 +881,10 @@ local function MakeColumn(which, x)
 	col.outlineLabel = col:CreateFontString(nil, "OVERLAY")
 	col.outlineLabel:SetFontObject("GameFontNormalSmall")
 	col.outlineLabel:SetText("Outline")
-	col.outlineLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -122)
+	col.outlineLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -120)
 	col.outline = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
 	col.outline:SetSize(126, 22)
-	col.outline:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -134)
+	col.outline:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -132)
 	col.outline:SetupMenu(function(_, rootDescription)
 		if not db then
 			return
@@ -783,15 +906,30 @@ local function MakeColumn(which, x)
 		end
 	end)
 
-	-- alert text
+	-- alert text: full-width InputBox sharing its right edge with the
+	-- dropdowns, shortened from the left by the box shift above.
+	-- Slimmer insets than the numeric boxes so typed text can use the full
+	-- box width; the pad below must stay their left+right sum (fit budget).
+	-- Left and right stay EQUAL: CENTER justification centers the text
+	-- field, so asymmetric insets visibly shift it off the box's middle.
 	col.textLabel = col:CreateFontString(nil, "OVERLAY")
 	col.textLabel:SetFontObject("GameFontNormalSmall")
 	col.textLabel:SetText("Text")
 	col.textLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -170)
 	col.textBox = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
-	col.textBox:SetSize(126, 20)
-	col.textBox:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -182)
+	col.textBox:SetSize(126 - FCA_TEXT_SHIFT + FCA_TEXT_GROW, 20)
+	col.textBox:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -182)
 	col.textBox:SetFontObject("GameFontHighlightSmall")
+	-- explicit base on top of the object (color stays): the fit tracks size
+	-- itself instead of resolving the template object back through GetFont
+	if col.textBox.SetFont then
+		col.textBox:SetFont(FCA_TEXT_FONT, FCA_TEXT_BASE, "")
+	end
+	col.textBox.FCA_size = FCA_TEXT_BASE
+	col.textBox.FCA_pad = 12
+	if col.textBox.SetTextInsets then
+		col.textBox:SetTextInsets(6, 6, 2, 2)
+	end
 	col.textBox:SetAutoFocus(false)
 	col.textBox:SetMaxLetters(40)
 	col.textBox:SetJustifyH("CENTER")
@@ -809,6 +947,11 @@ local function MakeColumn(which, x)
 			t.text = v
 		end
 		RefreshAll()
+	end)
+	-- fit mid-typing, not just on enter: shrinking the font never changes
+	-- the text, so this cannot recurse (SetFont fires no text event)
+	col.textBox:SetScript("OnTextChanged", function(self)
+		FCA_FitTextBox(self)
 	end)
 
 	-- direction: does the text travel up or down
@@ -847,8 +990,11 @@ local function MakeColumn(which, x)
 	col.durationLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -252)
 	col.duration = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
 	col.duration:SetSize(56, 20)
-	col.duration:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -264)
+	col.duration:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -264)
 	col.duration:SetFontObject("GameFontHighlightSmall")
+	if col.duration.SetTextInsets then
+		col.duration:SetTextInsets(10, 10, 2, 2)
+	end
 	col.duration:SetAutoFocus(false)
 	col.duration:SetMaxLetters(5)
 	col.duration:SetJustifyH("CENTER")
@@ -876,8 +1022,11 @@ local function MakeColumn(which, x)
 	col.fadeLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -292)
 	col.fade = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
 	col.fade:SetSize(56, 20)
-	col.fade:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -304)
+	col.fade:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -304)
 	col.fade:SetFontObject("GameFontHighlightSmall")
+	if col.fade.SetTextInsets then
+		col.fade:SetTextInsets(10, 10, 2, 2)
+	end
 	col.fade:SetAutoFocus(false)
 	col.fade:SetMaxLetters(3)
 	col.fade:SetJustifyH("CENTER")
@@ -902,8 +1051,9 @@ local function MakeColumn(which, x)
 		local cfg = db[which]
 		col.font:SetText(FontNameFor(cfg.font))
 		if col.font.Text then
-			col.font.Text:SetFont(cfg.font, 12, "")
+			col.font.Text:SetFont(cfg.font, FCA_LABEL_BASE, "")
 		end
+		FCA_FitDropdownText(col.font, cfg.font, FCA_LABEL_BASE)
 		if tonumber(col.size:GetText()) ~= cfg.size then
 			col.size:SetText(tostring(cfg.size))
 		end
@@ -916,6 +1066,7 @@ local function MakeColumn(which, x)
 		if col.textBox:GetText() ~= cfg.text then
 			col.textBox:SetText(cfg.text)
 		end
+		FCA_FitTextBox(col.textBox)
 		col.direction:SetText(DirectionNameFor(cfg.direction))
 		if tonumber(col.duration:GetText()) ~= cfg.duration then
 			col.duration:SetText(tostring(cfg.duration))
@@ -930,13 +1081,96 @@ end
 options.enterCol = MakeColumn("enter", 48)
 options.leaveCol = MakeColumn("leave", 184)
 
--- divider between the two segments (Blizzard's standard settings divider),
--- vertically centered between the outline dropdown and the text label
+-- MRM-style layout pass: center the two-column block in the window, center
+-- the link title on the window-left to options-left gap's middle with every
+-- check under it, then vertically center each check on its row's control.
+-- Runs once every control exists, so positions stay structural when rows move.
+local function FCA_LayoutControls()
+	if not (options and options.enterCol and options.leaveCol) then
+		return
+	end
+	for _, key in ipairs(LINK_KEYS) do
+		if not options.linkChecks[key] then
+			return
+		end
+	end
+	local winW = options:GetWidth() or 320
+	local colW = options.enterCol:GetWidth() or 130
+	local totalW = FCA_LINK_W + FCA_LINK_GAP + colW + FCA_COL_GAP + colW
+	local blockX = math.floor((winW - totalW) / 2 + 0.5)
+	local enterX = blockX + FCA_LINK_W + FCA_LINK_GAP
+	local leaveX = enterX + colW + FCA_COL_GAP
+	local function shift(frame, x)
+		local point, relTo, relPoint, _, y = frame:GetPoint(1)
+		if not point then
+			return
+		end
+		frame:ClearAllPoints()
+		frame:SetPoint(point, relTo, relPoint, x, y)
+	end
+	shift(options.enterCol, enterX)
+	shift(options.leaveCol, leaveX)
+	-- link column lives in the gap between the window's left edge and the
+	-- options' left edge: one gap middle parents both the title center and
+	-- the checkbox column, so the label and the checks can never drift
+	-- apart (integer rounding may sit either half a pixel off the middle).
+	local linkMiddle = enterX / 2
+	local linkX = math.floor(linkMiddle - FCA_LINK_W / 2 + 0.5)
+	if options.linkTitle then
+		options.linkTitle:ClearAllPoints()
+		options.linkTitle:SetPoint("TOP", options, "TOPLEFT", linkX + FCA_LINK_W / 2, -66)
+	end
+	-- link checks keep one straight column (fixed X) with each row's Y
+	-- derived from its control's center: no hardcoded row table to drift
+	local _, _, _, _, colY = options.enterCol:GetPoint(1)
+	if not colY then
+		return
+	end
+	for _, key in ipairs(LINK_KEYS) do
+		local cb = options.linkChecks[key]
+		local ctl = options.enterCol[LINK_CONTROLS[key]]
+		if ctl then
+			local _, _, _, _, ctlY = ctl:GetPoint(1)
+			local ctlH = ctl:GetHeight() or FCA_LINK_W
+			if ctlY then
+				local linkTop = colY + ctlY - ctlH / 2 + FCA_LINK_W / 2
+				cb:ClearAllPoints()
+				cb:SetPoint("TOPLEFT", options, "TOPLEFT", linkX, linkTop)
+			end
+		end
+	end
+end
+
+FCA_LayoutControls()
+
+-- dividers: the stocked GM-bgOpen pair, raw stock art, no sampling. Three
+-- sampling attempts are deleted history (same-pixels slice, edge-glow
+-- crop, center row, full-art transpose): the verticals kept rendering the
+-- native art's own striping regardless, so the sampling path was inert and
+-- only added failure modes. What renders is Blizzard's art as drawn.
+local FCA_DIV_H = "GM-bgOpen-divider-horizontal"
+local FCA_DIV_V = "GM-bgOpen-divider-vertical"
+
 options.divider = options:CreateTexture(nil, "OVERLAY")
-options.divider:SetAtlas("Options_HorizontalDivider", true)
+options.divider:SetAtlas(FCA_DIV_H, true)
 options.divider:SetPoint("LEFT", options, "LEFT", 12, 0)
 options.divider:SetPoint("RIGHT", options, "RIGHT", -12, 0)
-options.divider:SetPoint("TOP", options.enterCol.outline, "BOTTOM", 0, -7)
+options.divider:SetPoint("TOP", options.enterCol.outline, "BOTTOM", 0, -8)
+
+-- vertical column separators: the left one hangs 5px left of the entering
+-- column's edge; the right one sits centered in its gap (6px each side --
+-- Paint-measured off-center toward its right neighbors before). Both span
+-- top-to-bottom, crossing the header row like the columns do. Anchored to
+-- the right column of each gap so nothing can drift them.
+local function FCA_MakeVSeparator(anchorTo, xOff)
+	local sep = options:CreateTexture(nil, "OVERLAY")
+	sep:SetAtlas(FCA_DIV_V, true)
+	sep:SetPoint("TOP", anchorTo, "TOPLEFT", xOff, 20)
+	sep:SetPoint("BOTTOM", anchorTo, "BOTTOMLEFT", xOff, -6)
+	return sep
+end
+options.sepLink = FCA_MakeVSeparator(options.enterCol, -5)
+options.sepCols = FCA_MakeVSeparator(options.leaveCol, -6)
 
 function RefreshAll() -- assigns the forward-declared upvalue (see PumpLoop)
 	if not db or not options.enterCol then

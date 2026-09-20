@@ -1,5 +1,12 @@
 # Floating Combat Alert Changelog
 
+## v1.1.1 (2026-09-20)
+
+- Tidier options window: every setting lines up in even rows and columns, with dividers marking the Link, Entering and Leaving sections and all three headers sharing one row.
+- The travel region editor (`move region`) is now a plain yellow zone without the rounded border.
+- The font list reads cleaner, and long font names shrink to fit inside their boxes instead of getting cut off.
+- Long alert texts shrink while you type so they stay visible inside the text box.
+
 ## v1.1.0 (2026-09-19)
 
 - The addon now works in World of Warcraft: Forever (beta).
