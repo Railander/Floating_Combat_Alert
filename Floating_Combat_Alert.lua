@@ -70,7 +70,7 @@ local defaults = {
 }
 
 local db -- alias for the Floating_Combat_Alert SavedVariables table, set on ADDON_LOADED
-local REGION_MIN = 20 -- smallest allowed region, in yards
+local REGION_MIN = 20 -- smallest allowed region, in UI units
 
 local options, editor -- created below
 local RefreshAll, PumpLoop -- assigned below
@@ -255,10 +255,12 @@ end
 
 -- timeline for one alert: waits fadeStart% of the duration, then a constant
 -- linear fade reaching zero exactly at despawn (fadeStart 100 = never fades).
--- `progress` is how far the alert already is (0 at spawn, its true position
--- when settings change mid-flight): the frame stays where it is and only the
--- remaining travel and the fade ramp from that point are scheduled -- nothing
--- restarts. No negative start delays: the client clamps those to zero.
+-- `progress` is the elapsed fraction of the previous timeline (0 at spawn):
+-- the remaining distance is rescheduled over the remaining time at the same
+-- speed -- nothing restarts. Time-derived on purpose: a live Translation
+-- animation renders an offset without moving the anchor, so GetPoint here
+-- would read the stale spawn position and snap the text back. No negative
+-- start delays: the client clamps those to zero.
 local function ConfigureAlertAnimation(f, cfg, progress)
 	local duration = math.max(cfg.duration or 2, 0.05)
 	local fadeStart = math.max(0, math.min(100, cfg.fadeStart or 50)) / 100
@@ -383,7 +385,7 @@ local function StopLoopAndDespawn()
 end
 
 -- ----------------------------------------------------------------------------
--- cursor helper (screen yards, relative to nothing, raw client yards)
+-- cursor helper: raw client pixels converted to UIParent units
 -- ----------------------------------------------------------------------------
 local function CursorXY()
 	local x, y = GetCursorPosition()
@@ -403,10 +405,18 @@ editor:EnableMouse(true)
 editor:RegisterForDrag("LeftButton")
 editor:SetClampedToScreen(true)
 -- MRM move-box pattern: plain frame + BACKGROUND texture, no BackdropTemplate
--- border. Yellow 50% zone fill; green edge handles below stay untouched.
-local zoneTex = editor:CreateTexture(nil, "BACKGROUND")
-zoneTex:SetColorTexture(1, 1, 0, 0.5)
+-- border. The yellow fill lives on its own sub-HIGH frame so in-flight text
+-- (HIGH) and the green edge handles (TOOLTIP, on the editor) both render
+-- above it; the editor itself stays a pure input layer at TOOLTIP.
+local zone = CreateFrame("Frame", nil, UIParent)
+zone:SetFrameStrata("MEDIUM")
+zone:EnableMouse(false)
+local zoneTex = zone:CreateTexture(nil, "BACKGROUND")
+zoneTex:SetColorTexture(1, 1, 0, 0.25)
 zoneTex:SetAllPoints()
+zone.tex = zoneTex
+zone:Hide()
+editor.zone = zone
 editor:Hide()
 
 -- the band's horizontal extent always hugs the text so it fits snugly,
@@ -526,6 +536,11 @@ function editor:LayoutRegion()
 	self:ClearAllPoints()
 	self:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
 	self:SetSize(width, r.y2 - r.y1)
+	if self.zone then
+		self.zone:ClearAllPoints()
+		self.zone:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
+		self.zone:SetSize(width, r.y2 - r.y1)
+	end
 	self.edges.top:SetPoint("TOP", self, "TOP", 0, 0)
 	self.edges.bottom:SetPoint("BOTTOM", self, "BOTTOM", 0, 0)
 	self.readouts.top:SetPoint("BOTTOM", self.edges.top, "TOP", 0, 2)
@@ -539,7 +554,15 @@ function editor:LayoutRegion()
 end
 
 editor:SetScript("OnShow", function()
+	if editor.zone then
+		editor.zone:Show()
+	end
 	editor:LayoutRegion()
+end)
+editor:SetScript("OnHide", function()
+	if editor.zone then
+		editor.zone:Hide()
+	end
 end)
 end
 
@@ -1250,7 +1273,7 @@ end)
 -- chrome. Classic flavors run the same code: no gate system there at all.
 local inCombatKnown = nil
 
--- player-unit combat flag polling via UNIT_FLAGS; the dedicated
+-- player-unit combat flag tracking via UNIT_FLAGS; the dedicated
 -- PLAYER_ENTER/LEAVE_COMBAT events stay as the primary trigger, this catches
 -- transitions on clients/units where those events don't arrive
 local function SyncCombatState(allowAlert)
