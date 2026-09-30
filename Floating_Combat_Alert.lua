@@ -1266,16 +1266,23 @@ end)
 -- refuses, it errors LOUDLY (Bugsack, not silence): a silent queue would hide
 -- the bug, an error gets reported and fixed. The only guards left are
 -- crash-safety (nil options when the defensive UI build failed) and correctness
--- (first-sync adopts silently, expired timelines release). No restriction or
--- regen events installed: combat transitions need nothing beyond the
--- player-unit events below. The single Blizzard-shared touch (ColorPickerFrame
+-- (first-sync adopts silently, expired timelines release). No restriction
+-- events installed; combat arrives on the REGEN pair below (plus the
+-- UNIT_FLAGS sync), each verified against the player-unit flag. The single
+-- Blizzard-shared touch (ColorPickerFrame
 -- strata while picking) is idempotent and live-verified mid-combat on clean
 -- chrome. Classic flavors run the same code: no gate system there at all.
 local inCombatKnown = nil
 
--- player-unit combat flag tracking via UNIT_FLAGS; the dedicated
--- PLAYER_ENTER/LEAVE_COMBAT events stay as the primary trigger, this catches
--- transitions on clients/units where those events don't arrive
+-- combat state: the REGEN pair brackets true combat (mob hate list or PvP
+-- action). PLAYER_ENTER/LEAVE_COMBAT track auto-attack only -- starting or
+-- stopping melee swings fires them while combat continues -- so they stay
+-- unregistered (a stop-swings LEAVE mid-fight was the false "Leaving Combat"
+-- bug). Every trigger below re-reads UnitAffectingCombat("player") and alerts
+-- only on an actual change (Blizzard's AssistedCombatManager pattern), so
+-- spurious or duplicate events are harmless no-ops. Never query
+-- InCombatLockdown() here: it lags the events by design (secure-frame grace
+-- period); UnitAffectingCombat is the immediate check.
 local function SyncCombatState(allowAlert)
 	if not db then
 		return
@@ -1319,24 +1326,16 @@ local function FCA_loaded(self, event, arg1)
 			options:ClearAllPoints()
 			options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
 		end
-		-- the player unit's combat flag, not the regen lock (regen lags real
-		-- combat state and can keep running in combat, e.g. troll racial)
-		self:RegisterEvent("PLAYER_ENTER_COMBAT")
-		self:RegisterEvent("PLAYER_LEAVE_COMBAT")
+		-- the REGEN pair brackets true combat (hate list / PvP action);
+		-- UNIT_FLAGS re-syncs on any player-flag change (combat flag included)
+		self:RegisterEvent("PLAYER_REGEN_DISABLED")
+		self:RegisterEvent("PLAYER_REGEN_ENABLED")
 		self:RegisterUnitEvent("UNIT_FLAGS", "player")
 		if RefreshAll then
 			RefreshAll()
 		end
-	elseif event == "PLAYER_ENTER_COMBAT" then
-		if inCombatKnown ~= true then
-			inCombatKnown = true
-			SpawnAlert("enter")
-		end
-	elseif event == "PLAYER_LEAVE_COMBAT" then
-		if inCombatKnown ~= false then
-			inCombatKnown = false
-			SpawnAlert("leave")
-		end
+	elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
+		SyncCombatState(true)
 	elseif event == "UNIT_FLAGS" then
 		SyncCombatState(true)
 	elseif event == "PLAYER_ENTERING_WORLD" then

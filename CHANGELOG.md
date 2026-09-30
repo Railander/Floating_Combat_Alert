@@ -1,5 +1,10 @@
 # Floating Combat Alert Changelog
 
+## v1.1.2 (2026-09-30)
+
+- The travel region editor's yellow zone now renders below the floating text.
+- Combat alerts now follow your actual combat state instead of your melee swings: "Leaving Combat" no longer appears while you are still fighting (for example when your target dies mid-pull or you stop attacking between casts), and starting a fight with spells or by taking aggro now shows "Entering Combat".
+
 ## v1.1.1 (2026-09-20)
 
 - Tidier options window: every setting lines up in even rows and columns, with dividers marking the Link, Entering and Leaving sections and all three headers sharing one row.
