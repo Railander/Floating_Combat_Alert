@@ -1,5 +1,9 @@
 # Floating Combat Alert Changelog
 
+## v1.1.3 (2026-10-15)
+
+- The addon now works in World of Warcraft: Midnight (12.1.5).
+
 ## v1.1.2 (2026-09-30)
 
 - The travel region editor's yellow zone now renders below the floating text.
