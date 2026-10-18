@@ -4,7 +4,7 @@
 
 local ADDON_NAME = "Floating_Combat_Alert"
 
--- every typeface the game client ships: Blizzard's shared font families load
+-- the game client's typefaces: Blizzard's shared font families load
 -- these files on every locale, and LibSharedMedia (the font registry most
 -- addons pick from) offers the same set by default. Still validated at
 -- startup, so only working entries reach the dropdown
@@ -13,14 +13,11 @@ local FONT_CANDIDATES = {
 	{ text = "Friz Quadrata Cyrillic", path = "Fonts\\FRIZQT___CYR.TTF" },
 	{ text = "Arial Narrow", path = "Fonts\\ARIALN.TTF" },
 	{ text = "Morpheus", path = "Fonts\\MORPHEUS.TTF" },
-	{ text = "Morpheus Cyrillic", path = "Fonts\\MORPHEUS_CYR.TTF" },
 	{ text = "Skurri", path = "Fonts\\SKURRI.TTF" },
 	{ text = "Skurri Cyrillic", path = "Fonts\\SKURRI_CYR.TTF" },
 	{ text = "Nimrod MT", path = "Fonts\\NIM_____.ttf" },
 	{ text = "2002", path = "Fonts\\2002.TTF" },
-	{ text = "2002 Bold", path = "Fonts\\2002B.TTF" },
 	{ text = "MoK", path = "Fonts\\K_Pagetext.TTF" },
-	{ text = "AR Crystalzcuhei", path = "Fonts\\ARHei.ttf" },
 	{ text = "AR Zhongkai", path = "Fonts\\ARKai_T.ttf" },
 	{ text = "AR Zhongkai Combat", path = "Fonts\\ARKai_C.ttf" },
 }
@@ -72,6 +69,15 @@ local function FontKey(path)
 	return (path:lower():gsub("/", "\\"))
 end
 
+-- client files that draw English text exactly like a listed font (they differ
+-- only in Cyrillic or Chinese glyphs): left out of the list, also when another
+-- addon shares them, and a saved pick moves to the look-alike
+local FONT_TWINS = {
+	[FontKey("Fonts\\2002B.TTF")] = "Fonts\\FRIZQT__.TTF",
+	[FontKey("Fonts\\MORPHEUS_CYR.TTF")] = "Fonts\\MORPHEUS.TTF",
+	[FontKey("Fonts\\ARHei.ttf")] = "Fonts\\ARKai_T.ttf",
+}
+
 -- the client's and the bundled fonts: listed first, by file and by name
 local BASE_FONT_COUNT = #FONT_LIST
 local BASE_FONT_KEYS, BASE_FONT_NAMES = {}, {}
@@ -96,7 +102,7 @@ local function FontList()
 		for _, name in ipairs(lsm:List("font")) do
 			local path = paths[name]
 			local key = FontKey(path)
-			if key and not BASE_FONT_KEYS[key] and not BASE_FONT_NAMES[name:lower()] and not seen[key] then
+			if key and not BASE_FONT_KEYS[key] and not FONT_TWINS[key] and not BASE_FONT_NAMES[name:lower()] and not seen[key] then
 				seen[key] = true
 				FONT_LIST[#FONT_LIST + 1] = { text = name, path = path }
 			end
@@ -186,6 +192,11 @@ local function SanitizeFonts(allowPending)
 	local changed = false
 	for _, side in ipairs({ "enter", "leave" }) do
 		local key = FontKey(db[side].font)
+		if FONT_TWINS[key] then
+			db[side].font = FONT_TWINS[key]
+			key = FontKey(db[side].font)
+			changed = true
+		end
 		local pending = allowPending and key and key:find("^interface\\addons\\")
 		if not (key and known[key]) and not pending then
 			db[side].font = defaults.enter.font
