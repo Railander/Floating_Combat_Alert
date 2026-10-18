@@ -4,9 +4,10 @@
 
 local ADDON_NAME = "Floating_Combat_Alert"
 
--- every typeface family the game client ships (collected from the client's own
--- font references); locale variants load only on matching clients, so the list
--- is validated at startup and only working entries reach the dropdown
+-- every typeface the game client ships: Blizzard's shared font families load
+-- these files on every locale, and LibSharedMedia (the font registry most
+-- addons pick from) offers the same set by default. Still validated at
+-- startup, so only working entries reach the dropdown
 local FONT_CANDIDATES = {
 	{ text = "Friz Quadrata", path = "Fonts\\FRIZQT__.TTF" },
 	{ text = "Friz Quadrata Cyrillic", path = "Fonts\\FRIZQT___CYR.TTF" },
@@ -15,7 +16,37 @@ local FONT_CANDIDATES = {
 	{ text = "Morpheus Cyrillic", path = "Fonts\\MORPHEUS_CYR.TTF" },
 	{ text = "Skurri", path = "Fonts\\SKURRI.TTF" },
 	{ text = "Skurri Cyrillic", path = "Fonts\\SKURRI_CYR.TTF" },
+	{ text = "Nimrod MT", path = "Fonts\\NIM_____.ttf" },
+	{ text = "2002", path = "Fonts\\2002.TTF" },
+	{ text = "2002 Bold", path = "Fonts\\2002B.TTF" },
+	{ text = "MoK", path = "Fonts\\K_Pagetext.TTF" },
+	{ text = "AR Crystalzcuhei", path = "Fonts\\ARHei.ttf" },
+	{ text = "AR Zhongkai", path = "Fonts\\ARKai_T.ttf" },
+	{ text = "AR Zhongkai Combat", path = "Fonts\\ARKai_C.ttf" },
 }
+-- free-licensed fonts popular addons ship, bundled in this addon's Fonts
+-- folder (each family's licence sits in Fonts\Licenses)
+local BUNDLED_DIR = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Fonts\\"
+for _, e in ipairs({
+	{ "PT Sans Narrow", "PTSansNarrow-Regular.ttf" },
+	{ "PT Sans Narrow Bold", "PTSansNarrow-Bold.ttf" },
+	{ "Fira Sans Medium", "FiraSans-Medium.ttf" },
+	{ "Fira Sans Black", "FiraSans-Black.ttf" },
+	{ "Fira Sans Condensed Medium", "FiraSansCondensed-Medium.ttf" },
+	{ "Fira Sans Condensed Black", "FiraSansCondensed-Black.ttf" },
+	{ "Fira Mono Medium", "FiraMono-Medium.ttf" },
+	{ "Oswald", "Oswald-Regular.ttf" },
+	{ "Noto Sans Medium", "NotoSans-Medium.ttf" },
+	{ "Noto Sans SemiCondensed", "NotoSans-SemiCondensed.ttf" },
+	{ "Carlito", "Carlito-Regular.ttf" },
+	{ "Gentium Plus", "GentiumPlus-Regular.ttf" },
+	{ "Francois One", "FrancoisOne-Regular.ttf" },
+	{ "DejaVu Sans", "DejaVuLGCSans.ttf" },
+	{ "DejaVu Serif", "DejaVuLGCSerif.ttf" },
+	{ "Hack", "Hack-Regular.ttf" },
+}) do
+	FONT_CANDIDATES[#FONT_CANDIDATES + 1] = { text = e[1], path = BUNDLED_DIR .. e[2] }
+end
 local FONT_LIST = {}
 do
 	local probe = CreateFrame("Frame"):CreateFontString(nil, "OVERLAY")
@@ -32,6 +63,48 @@ do
 		FONT_LIST[1] = FONT_CANDIDATES[1] -- Friz Quadrata ships with every client
 	end
 end
+
+-- font paths compare case- and slash-insensitively (the client resolves both)
+local function FontKey(path)
+	if type(path) ~= "string" then
+		return nil
+	end
+	return (path:lower():gsub("/", "\\"))
+end
+
+-- the client's and the bundled fonts: listed first, by file and by name
+local BASE_FONT_COUNT = #FONT_LIST
+local BASE_FONT_KEYS, BASE_FONT_NAMES = {}, {}
+for _, e in ipairs(FONT_LIST) do
+	BASE_FONT_KEYS[FontKey(e.path)] = true
+	BASE_FONT_NAMES[e.text:lower()] = true
+end
+
+-- the base fonts, then every font other installed addons share through
+-- LibSharedMedia (sorted by name; copies of base fonts dropped, by file or by
+-- name -- other addons bundle the same families). Rebuilt in place on demand:
+-- most providers load after this addon, and the dropdown regenerates its menu
+-- on every open
+local function FontList()
+	for i = #FONT_LIST, BASE_FONT_COUNT + 1, -1 do
+		FONT_LIST[i] = nil
+	end
+	local lsm = LibStub and LibStub("LibSharedMedia-3.0", true)
+	if lsm then
+		local paths = lsm:HashTable("font")
+		local seen = {}
+		for _, name in ipairs(lsm:List("font")) do
+			local path = paths[name]
+			local key = FontKey(path)
+			if key and not BASE_FONT_KEYS[key] and not BASE_FONT_NAMES[name:lower()] and not seen[key] then
+				seen[key] = true
+				FONT_LIST[#FONT_LIST + 1] = { text = name, path = path }
+			end
+		end
+	end
+	return FONT_LIST
+end
+
 local OUTLINE_MENU = {
 	{ text = "None", style = "none" },
 	{ text = "Thin", style = "outline" },
@@ -43,22 +116,14 @@ local DIRECTION_MENU = {
 	{ text = "Down", style = "down" },
 }
 
-local function DirectionNameFor(style)
-	for _, e in ipairs(DIRECTION_MENU) do
-		if e.style == style then
+-- display name of a menu value; unknown values show as themselves
+local function MenuTextFor(menu, field, value)
+	for _, e in ipairs(menu) do
+		if e[field] == value then
 			return e.text
 		end
 	end
-	return style or "Up"
-end
-
-local function OutlineNameFor(style)
-	for _, e in ipairs(OUTLINE_MENU) do
-		if e.style == style then
-			return e.text
-		end
-	end
-	return style or "None"
+	return value
 end
 
 local defaults = {
@@ -91,23 +156,43 @@ local function RGBToHex(r, g, b)
 	return ("FF%02X%02X%02X"):format(math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5))
 end
 
+local OUTLINE_FLAGS = { outline = "OUTLINE", thick = "THICKOUTLINE" }
+
 local function FlagsString(cfg)
-	local t = {}
-	if cfg.outlineStyle == "outline" then
-		t[#t + 1] = "OUTLINE"
-	elseif cfg.outlineStyle == "thick" then
-		t[#t + 1] = "THICKOUTLINE"
-	end
-	return #t > 0 and table.concat(t, ", ") or nil
+	return OUTLINE_FLAGS[cfg.outlineStyle]
 end
 
+-- dropdown name of a font; a font whose provider has not registered yet
+-- shows its file name
 local function FontNameFor(path)
-	for _, e in ipairs(FONT_LIST) do
-		if e.path == path then
+	local key = FontKey(path)
+	for _, e in ipairs(FontList()) do
+		if FontKey(e.path) == key then
 			return e.text
 		end
 	end
-	return path or "?"
+	return type(path) == "string" and path:match("([^\\/]+)%.%w+$") or path or "?"
+end
+
+-- a saved font must still be on offer: a client file this build lacks, or an
+-- addon font whose provider is gone, falls back to the default instead of
+-- erroring on every alert. Addon fonts may wait for their provider while
+-- addons are still loading (re-checked on entering the world)
+local function SanitizeFonts(allowPending)
+	local known = {}
+	for _, e in ipairs(FontList()) do
+		known[FontKey(e.path)] = true
+	end
+	local changed = false
+	for _, side in ipairs({ "enter", "leave" }) do
+		local key = FontKey(db[side].font)
+		local pending = allowPending and key and key:find("^interface\\addons\\")
+		if not (key and known[key]) and not pending then
+			db[side].font = defaults.enter.font
+			changed = true
+		end
+	end
+	return changed
 end
 
 -- which alert tables an edit lands on: both sides when that setting is linked
@@ -308,11 +393,12 @@ local function SpawnAlert(which, fromLoop)
 	if #activeAlerts >= 8 then
 		ReleaseAlert(activeAlerts[1]) -- safety cap: recycle the oldest in-flight alert
 	end
-	local a = table.remove(alertPool) or CreateFrame("Frame", nil, UIParent)
-	a:SetFrameStrata("HIGH")
-	a:SetSize(1, 1)
-	a:EnableMouse(false)
-	if not a.text then
+	local a = table.remove(alertPool)
+	if not a then -- pooled frames keep everything set up here
+		a = CreateFrame("Frame", nil, UIParent)
+		a:SetFrameStrata("HIGH")
+		a:SetSize(1, 1)
+		a:EnableMouse(false)
 		a.text = a:CreateFontString(nil, "OVERLAY")
 		a.text:SetPoint("CENTER", a, "CENTER", 0, 0)
 		a.text:SetFont(defaults.enter.font, defaults.enter.size, FlagsString(defaults.enter))
@@ -515,6 +601,14 @@ for _, edge in ipairs({ "top", "bottom" }) do
 end
 editor.readouts.left = MakeReadout()
 editor.readouts.right = MakeReadout()
+-- handles and readouts hang off the editor's own edges: anchored once, they
+-- follow every move and resize
+editor.edges.top:SetPoint("TOP", editor, "TOP", 0, 0)
+editor.edges.bottom:SetPoint("BOTTOM", editor, "BOTTOM", 0, 0)
+editor.readouts.top:SetPoint("BOTTOM", editor.edges.top, "TOP", 0, 2)
+editor.readouts.bottom:SetPoint("TOP", editor.edges.bottom, "BOTTOM", 0, -2)
+editor.readouts.left:SetPoint("RIGHT", editor, "LEFT", -6, 0)
+editor.readouts.right:SetPoint("LEFT", editor, "RIGHT", 6, 0)
 
 editor:SetScript("OnDragStart", function()
 	if db then
@@ -536,17 +630,9 @@ function editor:LayoutRegion()
 	self:ClearAllPoints()
 	self:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
 	self:SetSize(width, r.y2 - r.y1)
-	if self.zone then
-		self.zone:ClearAllPoints()
-		self.zone:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
-		self.zone:SetSize(width, r.y2 - r.y1)
-	end
-	self.edges.top:SetPoint("TOP", self, "TOP", 0, 0)
-	self.edges.bottom:SetPoint("BOTTOM", self, "BOTTOM", 0, 0)
-	self.readouts.top:SetPoint("BOTTOM", self.edges.top, "TOP", 0, 2)
-	self.readouts.bottom:SetPoint("TOP", self.edges.bottom, "BOTTOM", 0, -2)
-	self.readouts.left:SetPoint("RIGHT", self, "LEFT", -6, 0)
-	self.readouts.right:SetPoint("LEFT", self, "RIGHT", 6, 0)
+	self.zone:ClearAllPoints()
+	self.zone:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
+	self.zone:SetSize(width, r.y2 - r.y1)
 	self.readouts.top:SetText(("%.0f"):format(r.y2))
 	self.readouts.bottom:SetText(("%.0f"):format(r.y1))
 	self.readouts.left:SetText(("%.0f"):format(left))
@@ -554,28 +640,12 @@ function editor:LayoutRegion()
 end
 
 editor:SetScript("OnShow", function()
-	if editor.zone then
-		editor.zone:Show()
-	end
+	zone:Show()
 	editor:LayoutRegion()
 end)
 editor:SetScript("OnHide", function()
-	if editor.zone then
-		editor.zone:Hide()
-	end
+	zone:Hide()
 end)
-end
-
--- menu system bootstrap: Blizzard_Menu ships with the retail client but may be
--- absent in older flavors; fall back to cycling fonts when it's unavailable
-local function EnsureMenuUtil()
-	if MenuUtil then
-		return true
-	end
-	if LoadAddOn then
-		pcall(LoadAddOn, "Blizzard_Menu")
-	end
-	return MenuUtil ~= nil
 end
 
 -- ----------------------------------------------------------------------------
@@ -750,11 +820,9 @@ local LINK_KEYS = { "font", "size", "color", "outline", "text", "direction", "du
 -- enter-column control per link key (swatch/textBox names differ from keys)
 local LINK_CONTROLS = { font = "font", size = "size", color = "swatch", outline = "outline", text = "textBox", direction = "direction", duration = "duration", fade = "fade" }
 options.linkChecks = {}
-local checkCount = 0
-for _, key in ipairs(LINK_KEYS) do
-	checkCount = checkCount + 1
+for i, key in ipairs(LINK_KEYS) do
 	local linkKey = key
-	local cb = CreateFrame("CheckButton", "FCALink" .. checkCount, options, "UICheckButtonTemplate")
+	local cb = CreateFrame("CheckButton", "FCALink" .. i, options, "UICheckButtonTemplate")
 	cb:SetSize(FCA_LINK_W, FCA_LINK_W)
 	cb:SetPoint("TOPLEFT", options, "TOPLEFT", 14, -92)
 	cb:SetScript("OnClick", function(self)
@@ -784,73 +852,97 @@ local function MakeColumn(which, x)
 	-- centered over the column like the Link label sits over its checks
 	col.title:SetPoint("TOP", col, "TOPLEFT", 63, 10)
 
-	-- font dropdown: real dropdown widget, its label rendered in the picked font
-	col.fontLabel = col:CreateFontString(nil, "OVERLAY")
-	col.fontLabel:SetFontObject("GameFontNormalSmall")
-	col.fontLabel:SetText("Font")
-	col.fontLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -4)
-	col.font = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
-	col.font:SetSize(126, 22)
-	col.font:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -16)
-	col.font:SetupMenu(function(_, rootDescription)
-		if not db then
-			return
-		end
-		for _, e in ipairs(FONT_LIST) do
-			rootDescription:CreateRadio(
-				e.text,
-				function(data)
-					return db[which].font == data
-				end,
-				function(data)
-					for _, t in ipairs(TargetsFor(which, "font")) do
-						t.font = data
-					end
-					RefreshAll()
-				end,
-				e.path
-			)
-			-- entries stay in the menu font on purpose: the menu compositor
-			-- wraps every entry region in a secure proxy whose metatable
-			-- asserts on SetFont (Blizzard_Menu/Compositor.lua), so per-entry
-			-- typefaces error loudly in game (Bugsack 3x/7x on open). The
-			-- picked typeface still previews on the dropdown button itself.
-		end
-	end)
-
-	-- size: numeric text box, type any value and press enter. Shifted right
-	-- with the other text boxes to meet the dropdowns' visible edge (see
-	-- the geometry note above). Labels share one left edge at x=2, all rows.
-	col.sizeLabel = col:CreateFontString(nil, "OVERLAY")
-	col.sizeLabel:SetFontObject("GameFontNormalSmall")
-	col.sizeLabel:SetText("Size")
-	col.sizeLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -46)
-	col.size = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
-	col.size:SetSize(56, 20)
-	col.size:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -58)
-	col.size:SetFontObject("GameFontHighlightSmall")
-	if col.size.SetTextInsets then
-		col.size:SetTextInsets(10, 10, 2, 2)
+	-- row label: every row's label shares one left edge at x=2
+	local function MakeLabel(text, y)
+		local fs = col:CreateFontString(nil, "OVERLAY")
+		fs:SetFontObject("GameFontNormalSmall")
+		fs:SetText(text)
+		fs:SetPoint("TOPLEFT", col, "TOPLEFT", 2, y)
+		return fs
 	end
-	col.size:SetAutoFocus(false)
-	col.size:SetMaxLetters(4)
-	col.size:SetJustifyH("CENTER")
-	col.size:SetScript("OnEnterPressed", function(self)
-		self:ClearFocus()
-		if not db then
-			return
+
+	-- labeled dropdown writing `field` from a menu of { text, [valueKey] }
+	-- entries; `entries` may be a function, evaluated on every menu open
+	local function MakeDropdown(label, y, entries, valueKey, field, linkKey)
+		local fs = MakeLabel(label, y)
+		local dd = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
+		dd:SetSize(126, 22)
+		dd:SetPoint("TOPLEFT", col, "TOPLEFT", 0, y - 12)
+		dd:SetupMenu(function(_, rootDescription)
+			if not db then
+				return
+			end
+			local list = type(entries) == "function" and entries() or entries
+			if #list > 20 then
+				rootDescription:SetScrollMode(20 * 20) -- 20 rows of 20px, then scroll
+			end
+			for _, e in ipairs(list) do
+				rootDescription:CreateRadio(
+					e.text,
+					function(data)
+						return db[which][field] == data
+					end,
+					function(data)
+						for _, t in ipairs(TargetsFor(which, linkKey)) do
+							t[field] = data
+						end
+						RefreshAll()
+					end,
+					e[valueKey]
+				)
+			end
+		end)
+		return dd, fs
+	end
+
+	-- labeled numeric box: type any value and press enter; it is clamped to
+	-- [lo, hi] (rounded to whole numbers when `whole`), non-numbers revert.
+	-- Shifted right with the other text boxes to meet the dropdowns' visible
+	-- edge (see the geometry note above).
+	local function MakeNumberBox(label, y, maxLetters, field, linkKey, lo, hi, whole)
+		local fs = MakeLabel(label, y)
+		local box = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
+		box:SetSize(56, 20)
+		box:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, y - 12)
+		box:SetFontObject("GameFontHighlightSmall")
+		if box.SetTextInsets then
+			box:SetTextInsets(10, 10, 2, 2)
 		end
-		local v = tonumber(self:GetText())
-		if v == nil then
-			self:SetText(tostring(db[which].size))
-			return
-		end
-		v = math.max(4, math.min(200, math.floor(v + 0.5)))
-		for _, t in ipairs(TargetsFor(which, "size")) do
-			t.size = v
-		end
-		RefreshAll()
-	end)
+		box:SetAutoFocus(false)
+		box:SetMaxLetters(maxLetters)
+		box:SetJustifyH("CENTER")
+		box:SetScript("OnEnterPressed", function(self)
+			self:ClearFocus()
+			if not db then
+				return
+			end
+			local v = tonumber(self:GetText())
+			if v == nil then
+				self:SetText(tostring(db[which][field]))
+				return
+			end
+			if whole then
+				v = math.floor(v + 0.5)
+			end
+			v = math.max(lo, math.min(hi, v))
+			for _, t in ipairs(TargetsFor(which, linkKey)) do
+				t[field] = v
+			end
+			RefreshAll()
+		end)
+		return box, fs
+	end
+
+	-- font dropdown: real dropdown widget, its label rendered in the picked font.
+	-- Entries stay in the menu font on purpose: the menu compositor wraps
+	-- every entry region in a secure proxy whose metatable asserts on SetFont
+	-- (Blizzard_Menu/Compositor.lua), so per-entry typefaces error loudly in
+	-- game (Bugsack 3x/7x on open). The picked typeface still previews on the
+	-- dropdown button itself.
+	col.font, col.fontLabel = MakeDropdown("Font", -4, FontList, "path", "font", "font")
+
+	-- size: whole points
+	col.size, col.sizeLabel = MakeNumberBox("Size", -46, 4, "size", "size", 4, 200, true)
 
 	-- color
 	col.swatch = CreateFrame("Button", nil, col)
@@ -900,34 +992,9 @@ local function MakeColumn(which, x)
 		})
 	end)
 
+
 	-- outline style dropdown
-	col.outlineLabel = col:CreateFontString(nil, "OVERLAY")
-	col.outlineLabel:SetFontObject("GameFontNormalSmall")
-	col.outlineLabel:SetText("Outline")
-	col.outlineLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -120)
-	col.outline = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
-	col.outline:SetSize(126, 22)
-	col.outline:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -132)
-	col.outline:SetupMenu(function(_, rootDescription)
-		if not db then
-			return
-		end
-		for _, e in ipairs(OUTLINE_MENU) do
-			rootDescription:CreateRadio(
-				e.text,
-				function(data)
-					return db[which].outlineStyle == data
-				end,
-				function(data)
-					for _, t in ipairs(TargetsFor(which, "outline")) do
-						t.outlineStyle = data
-					end
-					RefreshAll()
-				end,
-				e.style
-			)
-		end
-	end)
+	col.outline, col.outlineLabel = MakeDropdown("Outline", -120, OUTLINE_MENU, "style", "outlineStyle", "outline")
 
 	-- alert text: full-width InputBox sharing its right edge with the
 	-- dropdowns, shortened from the left by the box shift above.
@@ -935,10 +1002,7 @@ local function MakeColumn(which, x)
 	-- box width; the pad below must stay their left+right sum (fit budget).
 	-- Left and right stay EQUAL: CENTER justification centers the text
 	-- field, so asymmetric insets visibly shift it off the box's middle.
-	col.textLabel = col:CreateFontString(nil, "OVERLAY")
-	col.textLabel:SetFontObject("GameFontNormalSmall")
-	col.textLabel:SetText("Text")
-	col.textLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -170)
+	col.textLabel = MakeLabel("Text", -170)
 	col.textBox = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
 	col.textBox:SetSize(126 - FCA_TEXT_SHIFT + FCA_TEXT_GROW, 20)
 	col.textBox:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -182)
@@ -977,98 +1041,15 @@ local function MakeColumn(which, x)
 		FCA_FitTextBox(self)
 	end)
 
+
 	-- direction: does the text travel up or down
-	col.directionLabel = col:CreateFontString(nil, "OVERLAY")
-	col.directionLabel:SetFontObject("GameFontNormalSmall")
-	col.directionLabel:SetText("Direction")
-	col.directionLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -210)
-	col.direction = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
-	col.direction:SetSize(126, 22)
-	col.direction:SetPoint("TOPLEFT", col, "TOPLEFT", 0, -222)
-	col.direction:SetupMenu(function(_, rootDescription)
-		if not db then
-			return
-		end
-		for _, e in ipairs(DIRECTION_MENU) do
-			rootDescription:CreateRadio(
-				e.text,
-				function(data)
-					return db[which].direction == data
-				end,
-				function(data)
-					for _, t in ipairs(TargetsFor(which, "direction")) do
-						t.direction = data
-					end
-					RefreshAll()
-				end,
-				e.style
-			)
-		end
-	end)
+	col.direction, col.directionLabel = MakeDropdown("Direction", -210, DIRECTION_MENU, "style", "direction", "direction")
 
 	-- duration: seconds between spawning and despawning
-	col.durationLabel = col:CreateFontString(nil, "OVERLAY")
-	col.durationLabel:SetFontObject("GameFontNormalSmall")
-	col.durationLabel:SetText("Duration (sec)")
-	col.durationLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -252)
-	col.duration = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
-	col.duration:SetSize(56, 20)
-	col.duration:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -264)
-	col.duration:SetFontObject("GameFontHighlightSmall")
-	if col.duration.SetTextInsets then
-		col.duration:SetTextInsets(10, 10, 2, 2)
-	end
-	col.duration:SetAutoFocus(false)
-	col.duration:SetMaxLetters(5)
-	col.duration:SetJustifyH("CENTER")
-	col.duration:SetScript("OnEnterPressed", function(self)
-		self:ClearFocus()
-		if not db then
-			return
-		end
-		local v = tonumber(self:GetText())
-		if v == nil then
-			self:SetText(tostring(db[which].duration))
-			return
-		end
-		v = math.max(0.2, math.min(60, v))
-		for _, t in ipairs(TargetsFor(which, "duration")) do
-			t.duration = v
-		end
-		RefreshAll()
-	end)
+	col.duration, col.durationLabel = MakeNumberBox("Duration (sec)", -252, 5, "duration", "duration", 0.2, 60, false)
 
 	-- fade: percent of the duration at which fading out starts (constant rate)
-	col.fadeLabel = col:CreateFontString(nil, "OVERLAY")
-	col.fadeLabel:SetFontObject("GameFontNormalSmall")
-	col.fadeLabel:SetText("Fade start (%)")
-	col.fadeLabel:SetPoint("TOPLEFT", col, "TOPLEFT", 2, -292)
-	col.fade = CreateFrame("EditBox", nil, col, "InputBoxTemplate")
-	col.fade:SetSize(56, 20)
-	col.fade:SetPoint("TOPLEFT", col, "TOPLEFT", FCA_TEXT_SHIFT, -304)
-	col.fade:SetFontObject("GameFontHighlightSmall")
-	if col.fade.SetTextInsets then
-		col.fade:SetTextInsets(10, 10, 2, 2)
-	end
-	col.fade:SetAutoFocus(false)
-	col.fade:SetMaxLetters(3)
-	col.fade:SetJustifyH("CENTER")
-	col.fade:SetScript("OnEnterPressed", function(self)
-		self:ClearFocus()
-		if not db then
-			return
-		end
-		local v = tonumber(self:GetText())
-		if v == nil then
-			self:SetText(tostring(db[which].fadeStart))
-			return
-		end
-		v = math.max(0, math.min(100, math.floor(v + 0.5)))
-		for _, t in ipairs(TargetsFor(which, "fade")) do
-			t.fadeStart = v
-		end
-		RefreshAll()
-	end)
+	col.fade, col.fadeLabel = MakeNumberBox("Fade start (%)", -292, 3, "fadeStart", "fade", 0, 100, true)
 
 	col.Refresh = function()
 		local cfg = db[which]
@@ -1082,7 +1063,7 @@ local function MakeColumn(which, x)
 		end
 		local r, g, b = HexToRGB(cfg.color)
 		col.swatch.tex:SetColorTexture(r, g, b, 1)
-		col.outline:SetText(OutlineNameFor(cfg.outlineStyle))
+		col.outline:SetText(MenuTextFor(OUTLINE_MENU, "style", cfg.outlineStyle))
 		if col.outline.Text then
 			col.outline.Text:SetFontObject("GameFontHighlight")
 		end
@@ -1090,7 +1071,7 @@ local function MakeColumn(which, x)
 			col.textBox:SetText(cfg.text)
 		end
 		FCA_FitTextBox(col.textBox)
-		col.direction:SetText(DirectionNameFor(cfg.direction))
+		col.direction:SetText(MenuTextFor(DIRECTION_MENU, "style", cfg.direction))
 		if tonumber(col.duration:GetText()) ~= cfg.duration then
 			col.duration:SetText(tostring(cfg.duration))
 		end
@@ -1249,7 +1230,6 @@ end
 -- build the UI last and defensively: even if a widget template is missing in
 -- some client flavor, the combat alerts keep working
 pcall(function()
-	EnsureMenuUtil()
 	BuildRegionEditor()
 	BuildOptionsWindow()
 end)
@@ -1308,20 +1288,7 @@ local function FCA_loaded(self, event, arg1)
 		db = _G[ADDON_NAME]
 		MigrateLegacy(db)
 		MergeDefaults(db, defaults)
-		-- a saved font can point at a file this client doesn't ship (or one that
-		-- no longer exists); fall back to the default rather than error per frame
-		for _, side in ipairs({ "enter", "leave" }) do
-			local known = false
-			for _, e in ipairs(FONT_LIST) do
-				if e.path == db[side].font then
-					known = true
-					break
-				end
-			end
-			if not known then
-				db[side].font = defaults.enter.font
-			end
-		end
+		SanitizeFonts(not IsLoggedIn())
 		if options then -- the defensive UI build may have failed; alerts stand alone
 			options:ClearAllPoints()
 			options:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
@@ -1334,12 +1301,14 @@ local function FCA_loaded(self, event, arg1)
 		if RefreshAll then
 			RefreshAll()
 		end
-	elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" then
-		SyncCombatState(true)
-	elseif event == "UNIT_FLAGS" then
-		SyncCombatState(true)
 	elseif event == "PLAYER_ENTERING_WORLD" then
+		-- every addon has loaded by now: addon fonts left unregistered are gone
+		if db and SanitizeFonts(false) and RefreshAll then
+			RefreshAll()
+		end
 		SyncCombatState(false)
+	elseif event == "PLAYER_REGEN_DISABLED" or event == "PLAYER_REGEN_ENABLED" or event == "UNIT_FLAGS" then
+		SyncCombatState(true)
 	end
 end
 
@@ -1371,10 +1340,7 @@ SlashCmdList.FCA = function(msg)
 		MergeDefaults(db, defaults)
 		ReleaseAllAlerts()
 		if RefreshAll then
-			RefreshAll()
-		end
-		if editor and editor:IsShown() then
-			editor:LayoutRegion()
+			RefreshAll() -- also re-lays the editor when it is open
 		end
 		if options then
 			options:ClearAllPoints()

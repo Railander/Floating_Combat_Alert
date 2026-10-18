@@ -1,5 +1,13 @@
 # Floating Combat Alert Changelog
 
+## v1.2.0 (2026-10-18)
+
+- More fonts: Nimrod MT, 2002, 2002 Bold, MoK, AR Crystalzcuhei, AR Zhongkai and AR Zhongkai Combat join the font list.
+- 16 new fonts come with the addon: PT Sans Narrow, PT Sans Narrow Bold, Fira Sans Medium, Fira Sans Black, Fira Sans Condensed Medium, Fira Sans Condensed Black, Fira Mono Medium, Oswald, Noto Sans Medium, Noto Sans SemiCondensed, Carlito, Gentium Plus, Francois One, DejaVu Sans, DejaVu Serif and Hack. Their licences are included in the Fonts folder.
+- The font list scrolls.
+- Fonts your other addons share with the rest of your UI (the same extra fonts most popular addons let you pick) now appear in the font list too, after the built-in ones.
+- If the addon that provided your chosen font is removed, the alert falls back to Friz Quadrata instead of showing an error.
+
 ## v1.1.3 (2026-10-15)
 
 - The addon now works in World of Warcraft: Midnight (12.1.5).

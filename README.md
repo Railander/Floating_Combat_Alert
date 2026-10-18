@@ -16,6 +16,7 @@ Any other input does the same.
 - **move region** — show the travel region editor, then drag it anywhere or drag its top/bottom edges to resize it; the region always hugs the text width. Closing the window hides the editor.
 - **Link** — when checked, that row edits both alerts together; unchecked edits Entering and Leaving separately
 - **Font / Size / Color / Outline** — the look of each alert's text
+- The font list holds every game font, 16 extra fonts that come with the addon, and the fonts your other addons share
 - **Text** — the words each alert shows
 - **Direction** — whether the text travels up or down
 - **Duration** — seconds between spawning and despawning

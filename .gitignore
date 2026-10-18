@@ -32,6 +32,8 @@ source/
 !CHANGELOG.md
 !README.md
 !preview.gif
+!/Fonts/*.ttf
+!/Fonts/Licenses/*.txt
 !/.github/workflows/release.yml
 
 # local-only, never tracked even though the allowlist above would permit them
