@@ -6,10 +6,10 @@ Super lightweight addon that shows floating text when you enter or leave combat.
 
 ## Commands
 
-- `/fca` — open the configuration window
+- `/fca` — open or close the configuration window
 - `/fca reset` — restore default settings
 
-Any other input opens the window as well.
+Any other input does the same.
 
 ## The config window
 
