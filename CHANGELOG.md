@@ -1,8 +1,12 @@
 # Floating Combat Alert Changelog
 
-## Unreleased
+## v1.2.2 (2026-10-19)
 
 - The travel region editor and the configuration window now move the moment you press the mouse button, with no dead zone before they start following the cursor.
+- Picking a new font now applies it on the first try. Before, the first pick of a font that comes with the addon showed blank text in the font menu and changed nothing in the preview.
+- Each entry in the font menu is now drawn in its own font, so you can compare fonts without picking them.
+- Fonts shared by other addons whose file is missing no longer appear in the font menu. If your alert used a font from an addon you have since removed, it switches to Friz Quadrata.
+- The font list drops 2002, AR Zhongkai and AR Zhongkai Combat, which look the same as Friz Quadrata in English. If you had picked one of them, your alert switches to Friz Quadrata.
 
 ## v1.2.1 (2026-10-18)
 

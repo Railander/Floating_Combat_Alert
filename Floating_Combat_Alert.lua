@@ -16,10 +16,7 @@ local FONT_CANDIDATES = {
 	{ text = "Skurri", path = "Fonts\\SKURRI.TTF" },
 	{ text = "Skurri Cyrillic", path = "Fonts\\SKURRI_CYR.TTF" },
 	{ text = "Nimrod MT", path = "Fonts\\NIM_____.ttf" },
-	{ text = "2002", path = "Fonts\\2002.TTF" },
 	{ text = "MoK", path = "Fonts\\K_Pagetext.TTF" },
-	{ text = "AR Zhongkai", path = "Fonts\\ARKai_T.ttf" },
-	{ text = "AR Zhongkai Combat", path = "Fonts\\ARKai_C.ttf" },
 }
 -- free-licensed fonts popular addons ship, bundled in this addon's Fonts
 -- folder (each family's licence sits in Fonts\Licenses)
@@ -44,22 +41,6 @@ for _, e in ipairs({
 }) do
 	FONT_CANDIDATES[#FONT_CANDIDATES + 1] = { text = e[1], path = BUNDLED_DIR .. e[2] }
 end
-local FONT_LIST = {}
-do
-	local probe = CreateFrame("Frame"):CreateFontString(nil, "OVERLAY")
-	-- probing a missing font file raises an engine error ("Invalid font asset");
-	-- pcall catches it so nothing reaches Bugsack, and the false return plus the
-	-- failed call together guarantee broken fonts never enter the list
-	for _, e in ipairs(FONT_CANDIDATES) do
-		local ok, loaded = pcall(probe.SetFont, probe, e.path, 12, "")
-		if ok and loaded then
-			FONT_LIST[#FONT_LIST + 1] = e
-		end
-	end
-	if #FONT_LIST == 0 then
-		FONT_LIST[1] = FONT_CANDIDATES[1] -- Friz Quadrata ships with every client
-	end
-end
 
 -- font paths compare case- and slash-insensitively (the client resolves both)
 local function FontKey(path)
@@ -69,13 +50,61 @@ local function FontKey(path)
 	return (path:lower():gsub("/", "\\"))
 end
 
--- client files that draw English text exactly like a listed font (they differ
--- only in Cyrillic or Chinese glyphs): left out of the list, also when another
+-- the client loads a font file only once text in it is first drawn, and a
+-- string switched to a file that is not loaded yet stays blank until it is
+-- set again (a first pick showed nothing). So every offered font is drawn
+-- here, invisibly, from the first frame on and stays loaded.
+-- Fonts are validated on one probe string that already has a font: on a
+-- string with none, SetFont refuses a file that is not loaded yet, which
+-- dropped every font the game's own text had not used. A missing or broken
+-- file raises an engine error ("Invalid font asset"): only that keeps a font
+-- out of the list (pcall keeps it out of Bugsack). A false return alone is
+-- not a broken file, so such a font stays listed and preloaded
+local fontProbe = CreateFrame("Frame"):CreateFontString(nil, "OVERLAY")
+pcall(fontProbe.SetFont, fontProbe, "Fonts\\FRIZQT__.TTF", 12, "")
+-- FontString:SetFont itself, for strings whose own lookup refuses it (menu entries)
+local FontStringSetFont = fontProbe.SetFont
+local fontPreload = CreateFrame("Frame", nil, UIParent)
+fontPreload:SetSize(1, 1)
+fontPreload:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+local preloaded = {} -- font key -> whether the file loaded
+
+local function PreloadFont(e)
+	local key = FontKey(e.path)
+	if preloaded[key] == nil then
+		preloaded[key] = pcall(fontProbe.SetFont, fontProbe, e.path, 12, "")
+		if preloaded[key] then
+			local fs = fontPreload:CreateFontString(nil, "BACKGROUND")
+			pcall(fs.SetFont, fs, "Fonts\\FRIZQT__.TTF", 12, "") -- a font first, as on the probe
+			fs:SetFont(e.path, 12, "")
+			fs:SetPoint("BOTTOMLEFT", fontPreload, "BOTTOMLEFT", 0, 0)
+			fs:SetTextColor(1, 1, 1, 0)
+			fs:SetText(e.text)
+		end
+	end
+	return preloaded[key]
+end
+
+local FONT_LIST = {}
+for _, e in ipairs(FONT_CANDIDATES) do
+	if PreloadFont(e) then
+		FONT_LIST[#FONT_LIST + 1] = e
+	end
+end
+if #FONT_LIST == 0 then
+	FONT_LIST[1] = FONT_CANDIDATES[1] -- Friz Quadrata ships with every client
+end
+
+-- client files whose English text looks like a listed font (they differ mainly
+-- in Cyrillic or Chinese glyphs): left out of the list, also when another
 -- addon shares them, and a saved pick moves to the look-alike
 local FONT_TWINS = {
+	[FontKey("Fonts\\2002.TTF")] = "Fonts\\FRIZQT__.TTF",
 	[FontKey("Fonts\\2002B.TTF")] = "Fonts\\FRIZQT__.TTF",
+	[FontKey("Fonts\\ARKai_T.ttf")] = "Fonts\\FRIZQT__.TTF",
+	[FontKey("Fonts\\ARKai_C.ttf")] = "Fonts\\FRIZQT__.TTF",
+	[FontKey("Fonts\\ARHei.ttf")] = "Fonts\\FRIZQT__.TTF",
 	[FontKey("Fonts\\MORPHEUS_CYR.TTF")] = "Fonts\\MORPHEUS.TTF",
-	[FontKey("Fonts\\ARHei.ttf")] = "Fonts\\ARKai_T.ttf",
 }
 
 -- the client's and the bundled fonts: listed first, by file and by name
@@ -88,7 +117,8 @@ end
 
 -- the base fonts, then every font other installed addons share through
 -- LibSharedMedia (sorted by name; copies of base fonts dropped, by file or by
--- name -- other addons bundle the same families). Rebuilt in place on demand:
+-- name -- other addons bundle the same families; files that fail to load
+-- dropped, preloaded like the base fonts). Rebuilt in place on demand:
 -- most providers load after this addon, and the dropdown regenerates its menu
 -- on every open
 local function FontList()
@@ -104,7 +134,10 @@ local function FontList()
 			local key = FontKey(path)
 			if key and not BASE_FONT_KEYS[key] and not FONT_TWINS[key] and not BASE_FONT_NAMES[name:lower()] and not seen[key] then
 				seen[key] = true
-				FONT_LIST[#FONT_LIST + 1] = { text = name, path = path }
+				local e = { text = name, path = path }
+				if PreloadFont(e) then
+					FONT_LIST[#FONT_LIST + 1] = e
+				end
 			end
 		end
 	end
@@ -197,7 +230,10 @@ local function SanitizeFonts(allowPending)
 			key = FontKey(db[side].font)
 			changed = true
 		end
+		-- an addon's font may wait for its provider to load, unless its file
+		-- is gone (provider deleted): that falls back at once
 		local pending = allowPending and key and key:find("^interface\\addons\\")
+			and pcall(fontProbe.SetFont, fontProbe, db[side].font, 12, "")
 		if not (key and known[key]) and not pending then
 			db[side].font = defaults.enter.font
 			changed = true
@@ -879,8 +915,9 @@ local function MakeColumn(which, x)
 	end
 
 	-- labeled dropdown writing `field` from a menu of { text, [valueKey] }
-	-- entries; `entries` may be a function, evaluated on every menu open
-	local function MakeDropdown(label, y, entries, valueKey, field, linkKey)
+	-- entries; `entries` may be a function, evaluated on every menu open.
+	-- With `ownFonts`, each entry is drawn in the font its `path` names
+	local function MakeDropdown(label, y, entries, valueKey, field, linkKey, ownFonts)
 		local fs = MakeLabel(label, y)
 		local dd = CreateFrame("DropdownButton", nil, col, "WowStyle1DropdownTemplate")
 		dd:SetSize(126, 22)
@@ -894,7 +931,7 @@ local function MakeColumn(which, x)
 				rootDescription:SetScrollMode(20 * 20) -- 20 rows of 20px, then scroll
 			end
 			for _, e in ipairs(list) do
-				rootDescription:CreateRadio(
+				local entry = rootDescription:CreateRadio(
 					e.text,
 					function(data)
 						return db[which][field] == data
@@ -907,6 +944,13 @@ local function MakeColumn(which, x)
 					end,
 					e[valueKey]
 				)
+				if ownFonts then
+					entry:AddInitializer(function(button)
+						local text = button.fontString
+						FontStringSetFont(text, e.path, FCA_LABEL_BASE, "")
+						text:SetTextToFit(e.text)
+					end)
+				end
 			end
 		end)
 		return dd, fs
@@ -950,13 +994,13 @@ local function MakeColumn(which, x)
 		return box, fs
 	end
 
-	-- font dropdown: real dropdown widget, its label rendered in the picked font.
-	-- Entries stay in the menu font on purpose: the menu compositor wraps
-	-- every entry region in a secure proxy whose metatable asserts on SetFont
-	-- (Blizzard_Menu/Compositor.lua), so per-entry typefaces error loudly in
-	-- game (Bugsack 3x/7x on open). The picked typeface still previews on the
-	-- dropdown button itself.
-	col.font, col.fontLabel = MakeDropdown("Font", -4, FontList, "path", "font", "font")
+	-- font dropdown: real dropdown widget, its label and every entry rendered
+	-- in their own font. The menu compositor wraps each entry region in a
+	-- proxy whose lookup asserts on SetFont (Blizzard_Menu/Compositor.lua;
+	-- `entry.fontString:SetFont` raised Bugsack 3x/7x on open), so entries
+	-- call FontString:SetFont itself; releasing the entry restores the menu
+	-- font (SetFontObject in the compositor's defaults)
+	col.font, col.fontLabel = MakeDropdown("Font", -4, FontList, "path", "font", "font", true)
 
 	-- size: whole points
 	col.size, col.sizeLabel = MakeNumberBox("Size", -46, 4, "size", "size", 4, 200, true)
