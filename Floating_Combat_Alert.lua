@@ -499,7 +499,6 @@ editor = CreateFrame("Frame", "FloatingCombatAlertRegionEditor", UIParent)
 editor:SetFrameStrata("TOOLTIP")
 editor:SetMovable(true)
 editor:EnableMouse(true)
-editor:RegisterForDrag("LeftButton")
 editor:SetClampedToScreen(true)
 -- MRM move-box pattern: plain frame + BACKGROUND texture, no BackdropTemplate
 -- border. The yellow fill lives on its own sub-HIGH frame so in-flight text
@@ -621,13 +620,13 @@ editor.readouts.bottom:SetPoint("TOP", editor.edges.bottom, "BOTTOM", 0, -2)
 editor.readouts.left:SetPoint("RIGHT", editor, "LEFT", -6, 0)
 editor.readouts.right:SetPoint("LEFT", editor, "RIGHT", 6, 0)
 
-editor:SetScript("OnDragStart", function()
-	if db then
+-- the zone moves from the press itself (no drag threshold)
+editor:SetScript("OnMouseDown", function(_, btn)
+	if btn == "LeftButton" and db then
 		local cx, cy = CursorXY()
 		DragStart({ edge = nil, sx = cx, sy = cy, orig = CopyRect() })
 	end
 end)
-editor:SetScript("OnDragStop", DragStop)
 editor:SetScript("OnMouseUp", DragStop)
 
 -- place edges/boxes to the current band and mirror values into the boxes
@@ -776,12 +775,19 @@ options:SetSize(320, 414)
 options:SetPoint("CENTER", UIParent, "CENTER", defaults.win.x, defaults.win.y)
 options:SetMovable(true)
 options:EnableMouse(true)
-options:RegisterForDrag("LeftButton")
 options:SetClampedToScreen(true)
-options:SetScript("OnDragStart", function(self)
-	self:StartMoving()
+-- the window moves from the press itself (no drag threshold)
+options:SetScript("OnMouseDown", function(self, btn)
+	if btn == "LeftButton" then
+		self.moving = true
+		self:StartMoving()
+	end
 end)
-options:SetScript("OnDragStop", function(self)
+options:SetScript("OnMouseUp", function(self, btn)
+	if btn ~= "LeftButton" or not self.moving then
+		return
+	end
+	self.moving = false
 	self:StopMovingOrSizing()
 	if db then
 		local cx, cy = self:GetCenter()
@@ -1228,7 +1234,11 @@ options:SetScript("OnShow", function()
 	RefreshAll()
 	PumpLoop()
 end)
-options:SetScript("OnHide", function()
+options:SetScript("OnHide", function(self)
+	-- hidden mid-move (Escape): finish the move so the spot is saved
+	if self.moving then
+		self:GetScript("OnMouseUp")(self, "LeftButton")
+	end
 	-- closing the window stops the loop, despawns loop text and the editor
 	StopLoopAndDespawn()
 	if editor then

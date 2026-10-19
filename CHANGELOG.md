@@ -1,5 +1,9 @@
 # Floating Combat Alert Changelog
 
+## Unreleased
+
+- The travel region editor and the configuration window now move the moment you press the mouse button, with no dead zone before they start following the cursor.
+
 ## v1.2.1 (2026-10-18)
 
 - The font list drops 2002 Bold, Morpheus Cyrillic and AR Crystalzcuhei: in English they look the same as Friz Quadrata, Morpheus and AR Zhongkai. If you had picked one of them, your alert switches to its look-alike.
