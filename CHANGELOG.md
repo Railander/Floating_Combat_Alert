@@ -1,5 +1,9 @@
 # Floating Combat Alert Changelog
 
+## Unreleased
+
+- The font list drops Friz Quadrata Cyrillic and Skurri Cyrillic, which look the same as Friz Quadrata and Skurri in English. If you had picked one of them, your alert switches to its look-alike.
+
 ## v1.2.2 (2026-10-19)
 
 - The travel region editor and the configuration window now move the moment you press the mouse button, with no dead zone before they start following the cursor.

@@ -10,11 +10,9 @@ local ADDON_NAME = "Floating_Combat_Alert"
 -- startup, so only working entries reach the dropdown
 local FONT_CANDIDATES = {
 	{ text = "Friz Quadrata", path = "Fonts\\FRIZQT__.TTF" },
-	{ text = "Friz Quadrata Cyrillic", path = "Fonts\\FRIZQT___CYR.TTF" },
 	{ text = "Arial Narrow", path = "Fonts\\ARIALN.TTF" },
 	{ text = "Morpheus", path = "Fonts\\MORPHEUS.TTF" },
 	{ text = "Skurri", path = "Fonts\\SKURRI.TTF" },
-	{ text = "Skurri Cyrillic", path = "Fonts\\SKURRI_CYR.TTF" },
 	{ text = "Nimrod MT", path = "Fonts\\NIM_____.ttf" },
 	{ text = "MoK", path = "Fonts\\K_Pagetext.TTF" },
 }
@@ -104,7 +102,9 @@ local FONT_TWINS = {
 	[FontKey("Fonts\\ARKai_T.ttf")] = "Fonts\\FRIZQT__.TTF",
 	[FontKey("Fonts\\ARKai_C.ttf")] = "Fonts\\FRIZQT__.TTF",
 	[FontKey("Fonts\\ARHei.ttf")] = "Fonts\\FRIZQT__.TTF",
+	[FontKey("Fonts\\FRIZQT___CYR.TTF")] = "Fonts\\FRIZQT__.TTF",
 	[FontKey("Fonts\\MORPHEUS_CYR.TTF")] = "Fonts\\MORPHEUS.TTF",
+	[FontKey("Fonts\\SKURRI_CYR.TTF")] = "Fonts\\SKURRI.TTF",
 }
 
 -- the client's and the bundled fonts: listed first, by file and by name
@@ -749,7 +749,7 @@ local function FCA_DropdownBudget(button)
 end
 
 -- shrink a dropdown's selected label until it fits the button's text area.
--- Long family names (e.g. "Friz Quadrata Cyrillic") overflow at the base
+-- Long family names (e.g. "Fira Sans Condensed Medium") overflow at the base
 -- size; stepping down keeps them visible instead of clipped by the arrow.
 -- Always starts from the base size, so a shorter pick grows back. Template
 -- geometry stands untouched (re-anchoring the field broke vertical
