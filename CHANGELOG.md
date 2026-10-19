@@ -1,7 +1,9 @@
 # Floating Combat Alert Changelog
 
-## Unreleased
+## v1.2.3 (2026-10-19)
 
+- The download is about 7 times smaller (0.5 MB instead of 3.5 MB). The fonts that come with the addon now hold only the letters of English and other Western European languages, accents included, and look exactly as before. Text in other alphabets, such as Cyrillic, shows as boxes in these fonts. The game's own fonts are unchanged.
+- PT Sans Narrow, PT Sans Narrow Bold, Carlito and Gentium Plus are now called Narrow Sans, Narrow Sans Bold, Humanist Sans and Book Serif, as their licence requires for trimmed copies. If your alert used one of them, it keeps that font under its new name.
 - The font list drops Friz Quadrata Cyrillic and Skurri Cyrillic, which look the same as Friz Quadrata and Skurri in English. If you had picked one of them, your alert switches to its look-alike.
 
 ## v1.2.2 (2026-10-19)

@@ -17,11 +17,13 @@ local FONT_CANDIDATES = {
 	{ text = "MoK", path = "Fonts\\K_Pagetext.TTF" },
 }
 -- free-licensed fonts popular addons ship, bundled in this addon's Fonts
--- folder (each family's licence sits in Fonts\Licenses)
+-- folder (licences in Fonts\Licenses), cut down to Western European
+-- characters; the OFL makes trimmed PT Sans Narrow, Carlito and Gentium Plus
+-- take new names
 local BUNDLED_DIR = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Fonts\\"
 for _, e in ipairs({
-	{ "PT Sans Narrow", "PTSansNarrow-Regular.ttf" },
-	{ "PT Sans Narrow Bold", "PTSansNarrow-Bold.ttf" },
+	{ "Narrow Sans", "NarrowSans-Regular.ttf" },
+	{ "Narrow Sans Bold", "NarrowSans-Bold.ttf" },
 	{ "Fira Sans Medium", "FiraSans-Medium.ttf" },
 	{ "Fira Sans Black", "FiraSans-Black.ttf" },
 	{ "Fira Sans Condensed Medium", "FiraSansCondensed-Medium.ttf" },
@@ -30,8 +32,8 @@ for _, e in ipairs({
 	{ "Oswald", "Oswald-Regular.ttf" },
 	{ "Noto Sans Medium", "NotoSans-Medium.ttf" },
 	{ "Noto Sans SemiCondensed", "NotoSans-SemiCondensed.ttf" },
-	{ "Carlito", "Carlito-Regular.ttf" },
-	{ "Gentium Plus", "GentiumPlus-Regular.ttf" },
+	{ "Humanist Sans", "HumanistSans-Regular.ttf" },
+	{ "Book Serif", "BookSerif-Regular.ttf" },
 	{ "Francois One", "FrancoisOne-Regular.ttf" },
 	{ "DejaVu Sans", "DejaVuLGCSans.ttf" },
 	{ "DejaVu Serif", "DejaVuLGCSerif.ttf" },
@@ -106,6 +108,13 @@ local FONT_TWINS = {
 	[FontKey("Fonts\\MORPHEUS_CYR.TTF")] = "Fonts\\MORPHEUS.TTF",
 	[FontKey("Fonts\\SKURRI_CYR.TTF")] = "Fonts\\SKURRI.TTF",
 }
+-- bundled files renamed since: a saved pick moves to the new file
+local FONT_RENAMED = {
+	[FontKey(BUNDLED_DIR .. "PTSansNarrow-Regular.ttf")] = BUNDLED_DIR .. "NarrowSans-Regular.ttf",
+	[FontKey(BUNDLED_DIR .. "PTSansNarrow-Bold.ttf")] = BUNDLED_DIR .. "NarrowSans-Bold.ttf",
+	[FontKey(BUNDLED_DIR .. "Carlito-Regular.ttf")] = BUNDLED_DIR .. "HumanistSans-Regular.ttf",
+	[FontKey(BUNDLED_DIR .. "GentiumPlus-Regular.ttf")] = BUNDLED_DIR .. "BookSerif-Regular.ttf",
+}
 
 -- the client's and the bundled fonts: listed first, by file and by name
 local BASE_FONT_COUNT = #FONT_LIST
@@ -113,6 +122,10 @@ local BASE_FONT_KEYS, BASE_FONT_NAMES = {}, {}
 for _, e in ipairs(FONT_LIST) do
 	BASE_FONT_KEYS[FontKey(e.path)] = true
 	BASE_FONT_NAMES[e.text:lower()] = true
+end
+-- other addons share the renamed fonts untrimmed, under their own names
+for _, name in ipairs({ "PT Sans Narrow", "PT Sans Narrow Bold", "Carlito", "Gentium Plus" }) do
+	BASE_FONT_NAMES[name:lower()] = true
 end
 
 -- the base fonts, then every font other installed addons share through
@@ -225,8 +238,9 @@ local function SanitizeFonts(allowPending)
 	local changed = false
 	for _, side in ipairs({ "enter", "leave" }) do
 		local key = FontKey(db[side].font)
-		if FONT_TWINS[key] then
-			db[side].font = FONT_TWINS[key]
+		local moved = FONT_TWINS[key] or FONT_RENAMED[key]
+		if moved then
+			db[side].font = moved
 			key = FontKey(db[side].font)
 			changed = true
 		end

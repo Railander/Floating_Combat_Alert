@@ -1,4 +1,4 @@
-## Interface: 120000, 120100, 120105, 16001
+## Interface: 120105, 16001
 ## Version: @project-version@
 ## Title: Floating Combat Alert
 ## Notes: Super lightweight addon that shows floating text when you enter or leave combat, type /fca for the options window.
