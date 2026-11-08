@@ -1,5 +1,15 @@
 # Floating Combat Alert Changelog
 
+## v1.2.4 (2026-11-08)
+
+- Fixed: a damaged saved position, or an unreadable mouse position during a drag, could make the travel region or the configuration window disappear and stay broken across sessions. Such values are now ignored: the last good position is kept, and a damaged saved position is repaired to a usable one (a readable center is kept).
+- Fixed: a damaged saved setting, such as a travel region with only one corner or a size that is not a number, could stop every alert; these values now fall back to what the configuration window allows.
+- Fixed: closing the window in the middle of a drag could leave the travel region following the mouse afterwards, and `/fca reset` during a drag could be overwritten by the stale drag.
+- Fixed: when the travel region was shorter than the alert text, the text moved against the direction you picked.
+- Fixed: an old profile's alert duration now carries over instead of falling back to two seconds.
+- Fixed: the color picker window is shared with other addons. Opening it from Floating Combat Alert no longer takes over its drag behavior, and it returns to its normal layer when it closes. It still moves by its title bar.
+- Typing text that is not a real number (such as `nan` or `inf`) into a numeric box no longer changes its setting.
+
 ## v1.2.3 (2026-10-19)
 
 - The download is about 7 times smaller (0.5 MB instead of 3.5 MB). The fonts that come with the addon now hold only the letters of English and other Western European languages, accents included, and look exactly as before. Text in other alphabets, such as Cyrillic, shows as boxes in these fonts. The game's own fonts are unchanged.

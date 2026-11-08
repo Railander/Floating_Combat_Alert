@@ -58,7 +58,7 @@ end
 -- string with none, SetFont refuses a file that is not loaded yet, which
 -- dropped every font the game's own text had not used. A missing or broken
 -- file raises an engine error ("Invalid font asset"): only that keeps a font
--- out of the list (pcall keeps it out of Bugsack). A false return alone is
+-- out of the list (pcall keeps it from raising). A false return alone is
 -- not a broken file, so such a font stays listed and preloaded
 local fontProbe = CreateFrame("Frame"):CreateFontString(nil, "OVERLAY")
 pcall(fontProbe.SetFont, fontProbe, "Fonts\\FRIZQT__.TTF", 12, "")
@@ -189,6 +189,28 @@ local defaults = {
 local db -- alias for the Floating_Combat_Alert SavedVariables table, set on ADDON_LOADED
 local REGION_MIN = 20 -- smallest allowed region, in UI units
 
+-- a cursor read or a saved number the client cannot produce (0/0, inf) must
+-- never be drawn or committed: keep the value already in place
+local function IsFinite(v)
+	return type(v) == "number" and v == v and math.abs(v) ~= math.huge
+end
+
+local function FiniteOr(value, fallback)
+	if IsFinite(value) then
+		return value
+	end
+	return fallback
+end
+
+-- a saved number the options window could not have produced: the documented
+-- range wins; anything that is not a number falls back to the default
+local function ClampNumber(value, lo, hi, fallback)
+	if not IsFinite(value) then
+		return fallback
+	end
+	return math.max(lo, math.min(hi, value))
+end
+
 local options, editor -- created below
 local RefreshAll, PumpLoop -- assigned below
 
@@ -256,6 +278,73 @@ local function SanitizeFonts(allowPending)
 	return changed
 end
 
+-- saved geometry can only hold real numbers: a corrupt value falls back to
+-- the documented default for that key instead of being drawn or written back
+local function SanitizeGeometry()
+	local changed = false
+	local r = db.region
+	local d = defaults.region
+	for _, key in ipairs({ "cx", "y1", "y2" }) do
+		if not IsFinite(r[key]) then
+			r[key] = d[key]
+			changed = true
+		end
+	end
+	-- only the edge handles change the height and they never go below
+	-- REGION_MIN: a squashed or swapped band (a damaged file, or the legacy
+	-- rise saved negative) would reverse the travel direction and hand the
+	-- editor a degenerate rect, so it heals to the default height around the
+	-- vertical centre the save still expresses
+	local span = r.y2 - r.y1
+	if not (IsFinite(span) and span >= REGION_MIN) then
+		local mid = (r.y1 + r.y2) / 2
+		local half = (d.y2 - d.y1) / 2
+		local bottom, top = mid - half, mid + half
+		if IsFinite(mid) and IsFinite(bottom) and IsFinite(top) and top - bottom >= REGION_MIN then
+			r.y1, r.y2 = bottom, top
+		else
+			r.y1, r.y2 = d.y1, d.y2
+		end
+		changed = true
+	end
+	for _, key in ipairs({ "x", "y" }) do
+		if not IsFinite(db.win[key]) then
+			db.win[key] = defaults.win[key]
+			changed = true
+		end
+	end
+	return changed
+end
+
+-- the alert settings are written only by the options window, which clamps and
+-- validates every one of them. A file damaged outside the game (hand-edited,
+-- or cut short by a crash) could otherwise error on every combat transition
+-- (SetFont with a non-number size, math.min with a non-number fade start) or
+-- draw an empty alert, so each field falls back to what the window allows
+local function SanitizeAlertConfig()
+	local changed = false
+	for _, side in ipairs({ "enter", "leave" }) do
+		local cfg, d = db[side], defaults[side]
+		local function set(key, value)
+			if cfg[key] ~= value then
+				cfg[key] = value
+				changed = true
+			end
+		end
+		set("text", (type(cfg.text) == "string" and cfg.text ~= "") and cfg.text or d.text)
+		set("size", ClampNumber(cfg.size, 4, 200, d.size))
+		set("duration", ClampNumber(cfg.duration, 0.2, 60, d.duration))
+		set("fadeStart", ClampNumber(cfg.fadeStart, 0, 100, d.fadeStart))
+		set("color", (type(cfg.color) == "string" and cfg.color:match("^%x%x%x%x%x%x%x%x$"))
+			and cfg.color or d.color)
+		set("direction", (cfg.direction == "up" or cfg.direction == "down") and cfg.direction
+			or d.direction)
+		set("outlineStyle", (cfg.outlineStyle == "none" or cfg.outlineStyle == "outline"
+			or cfg.outlineStyle == "thick") and cfg.outlineStyle or d.outlineStyle)
+	end
+	return changed
+end
+
 -- which alert tables an edit lands on: both sides when that setting is linked
 local function TargetsFor(which, key)
 	if db.link[key] then
@@ -287,12 +376,15 @@ local function MigrateLegacy(dbt)
 			enter.size, leave.size = dbt.fontSize, dbt.fontSize
 		end
 		dbt.enter, dbt.leave = enter, leave
-		if dbt.y ~= nil then
-			local x = dbt.x or 0
-			local rise = dbt.rise or 80
-			dbt.region = { x1 = x - 150, y1 = dbt.y, x2 = x + 150, y2 = dbt.y + rise }
+		local y = tonumber(dbt.y)
+		if y then
+			local x = tonumber(dbt.x) or 0
+			local rise = tonumber(dbt.rise) or 80
+			dbt.region = { x1 = x - 150, y1 = y, x2 = x + 150, y2 = y + rise }
 		end
-		for _, k in ipairs({ "duration", "x", "y", "rise", "enterText", "leaveText", "enterColor", "leaveColor", "fontSize" }) do
+		-- v1's global duration is not dropped here: the v0.4 -> v0.5 step
+		-- below splits the same setting per side
+		for _, k in ipairs({ "x", "y", "rise", "enterText", "leaveText", "enterColor", "leaveColor", "fontSize" }) do
 			dbt[k] = nil
 		end
 	end
@@ -334,10 +426,17 @@ local function MigrateLegacy(dbt)
 		end
 		dbt.duration = nil
 	end
-	-- v0.5: the region is a band centered on cx; its width hugs the text
+	-- v0.5: the region is a band centered on cx; its width hugs the text.
+	-- A damaged save can hold only one corner; the edges it does hold survive
+	-- and the center falls back to the default instead of erroring the load
 	local r = dbt.region
 	if type(r) == "table" and r.cx == nil and r.x1 ~= nil then
-		dbt.region = { cx = (r.x1 + r.x2) / 2, y1 = r.y1, y2 = r.y2 }
+		local x1, x2 = tonumber(r.x1), tonumber(r.x2)
+		dbt.region = {
+			cx = (x1 and x2) and (x1 + x2) / 2 or nil,
+			y1 = r.y1,
+			y2 = r.y2,
+		}
 	end
 end
 
@@ -413,8 +512,17 @@ local function ConfigureAlertAnimation(f, cfg, progress)
 	local r = db.region
 	local down = cfg.direction == "down"
 	local h = f.text:GetStringHeight()
-	local fromY = down and (r.y2 - h / 2) or (r.y1 + h / 2)
-	local toY = down and (r.y1 + h / 2) or (r.y2 - h / 2)
+	-- a band shorter than the text (the 20-unit minimum against a tall font)
+	-- has no room to travel in: hold the spawn edge instead of reversing the
+	-- direction the player picked
+	local fromY, toY
+	if down then
+		fromY = r.y2 - h / 2
+		toY = math.min(r.y1 + h / 2, fromY)
+	else
+		fromY = r.y1 + h / 2
+		toY = math.max(r.y2 - h / 2, fromY)
+	end
 
 	local curY = fromY + (toY - fromY) * progress
 	f:ClearAllPoints()
@@ -540,6 +648,16 @@ local function CursorXY()
 	return x / s, y / s
 end
 
+-- stop the editor drag (idempotent): the OnUpdate script exists only while a
+-- drag is active. File-scope so the slash reset can end a live gesture too.
+local function DragStop()
+	if not editor then
+		return
+	end
+	editor.drag = nil
+	editor:SetScript("OnUpdate", nil)
+end
+
 -- ----------------------------------------------------------------------------
 -- region editor: semi-transparent zone the text travels in, draggable corners.
 -- Built inside a function so a failure here can never take down the alerts.
@@ -585,6 +703,10 @@ local function CopyRect()
 end
 
 local function CommitRect(rect)
+	local r = db.region
+	rect.cx = FiniteOr(rect.cx, r.cx)
+	rect.y1 = FiniteOr(rect.y1, r.y1)
+	rect.y2 = FiniteOr(rect.y2, r.y2)
 	db.region = rect
 	editor:LayoutRegion()
 end
@@ -620,11 +742,6 @@ end
 local function DragStart(drag)
 	editor.drag = drag
 	editor:SetScript("OnUpdate", DragOnUpdate)
-end
-
-local function DragStop()
-	editor.drag = nil
-	editor:SetScript("OnUpdate", nil)
 end
 
 -- drag bars on the top/bottom edges: vertical resize only
@@ -685,8 +802,10 @@ function editor:LayoutRegion()
 		return
 	end
 	local r = db.region
-	local left = self:BandLeft()
+	-- one measurement for the whole pass: BandLeft would measure both sides
+	-- again on every drag frame
 	local width = self:BandWidth()
+	local left = r.cx - width / 2
 	self:ClearAllPoints()
 	self:SetPoint("BOTTOMLEFT", UIParent, "CENTER", left, r.y1)
 	self:SetSize(width, r.y2 - r.y1)
@@ -704,6 +823,10 @@ editor:SetScript("OnShow", function()
 	editor:LayoutRegion()
 end)
 editor:SetScript("OnHide", function()
+	-- a hide in the middle of a gesture (the window closing, the move-region
+	-- toggle) must end the drag: OnUpdate stops with the frame, so a live drag
+	-- would resume tracking the cursor on the next show with no button held
+	DragStop()
 	zone:Hide()
 end)
 end
@@ -711,18 +834,35 @@ end
 -- ----------------------------------------------------------------------------
 -- options window (also built defensively; see BuildRegionEditor)
 -- ----------------------------------------------------------------------------
-local colorPickerDragSetup = false
+-- The picker belongs to Blizzard and is shared with every addon that opens it
+-- (Blizzard dropdowns, other addons' options). FCA only borrows its strata for
+-- the duration of a pick and gives it back; never replace its scripts or drag
+-- registration: other addons install their own handlers on this frame
+-- (header-only drag guards are a common pattern), and the stock DragBar
+-- already moves the picker on every supported flavor.
+local colorPickerPrevStrata = nil
+local colorPickerStrataHooked = false
 
--- config-window geometry (MRM lessons): uniform 12px label-above-control
--- gap, uniform 8px inter-row gap, two-column block centered via the layout
--- pass below. TextBox frames sit FCA_TEXT_SHIFT right of the dropdowns'
--- edge: frames may agree while visible art disagrees (dropdown background
--- vs InputBox caps), and live the dropdowns read right of the boxes.
--- Paint-measured, one number, live-tuned. Fractional values are legal
--- (float32 layout): the reporter's screen pixels run ~2x stored units, so
--- all Paint numbers arrive halved. The long text box keeps its right edge
--- shared and shortens from the left instead, plus a half-px grow right
--- past that edge (enlarge, not move, per live order).
+local function RestoreColorPickerStrata()
+	if not colorPickerPrevStrata then
+		return
+	end
+	local prev = colorPickerPrevStrata
+	colorPickerPrevStrata = nil
+	-- another addon may have re-layered the shared frame while it was open:
+	-- only undo our own TOOLTIP raise
+	if ColorPickerFrame:GetFrameStrata() == "TOOLTIP" then
+		ColorPickerFrame:SetFrameStrata(prev)
+	end
+end
+
+-- config-window geometry: uniform 12px label-above-control gap, uniform 8px
+-- inter-row gap, two-column block centered via the layout pass below.
+-- TextBox frames sit FCA_TEXT_SHIFT right of the dropdowns' edge: frames may
+-- agree while visible art disagrees (dropdown background vs InputBox caps).
+-- One measured, tuned number; fractional values are legal (float32 layout).
+-- The long text box keeps its right edge shared and shortens from the left
+-- instead, plus a half-px grow right past that edge (enlarge, not move).
 local FCA_TEXT_SHIFT = 4.5
 local FCA_TEXT_GROW = 0.5
 local FCA_LINK_GAP = 12
@@ -731,13 +871,13 @@ local FCA_LINK_W = 22
 -- EditBox text insets stay left/right SYMMETRIC everywhere (10/10 numeric,
 -- 6/6 text): SetJustifyH("CENTER") centers the text field, so any asymmetry
 -- visibly shifts the text off the box's middle while typing.
--- dropdown chrome: historic pad, used only where the template interiors
--- are unavailable (mock client); live buttons measure their own arrow
+-- dropdown chrome: historic pad, used only where template interiors are
+-- unavailable; real buttons measure their own arrow
 local FCA_DROPDOWN_PAD = 40
 local FCA_LABEL_BASE = 12 -- GameFontHighlight (dropdown template Text), Fonts.xml:275-284
 local FCA_TEXT_BASE = 10 -- GameFontHighlightSmall (all EditBoxes), Fonts.xml:39-46
 -- Friz ships with every client (same file the template resolves to); the
--- literal covers fontless harnesses where the global is absent
+-- literal covers environments where the global is absent
 local FCA_TEXT_FONT = STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF"
 local FCA_TEXT_MIN = 7
 
@@ -842,7 +982,11 @@ options:SetScript("OnMouseUp", function(self, btn)
 	if db then
 		local cx, cy = self:GetCenter()
 		local pw, ph = UIParent:GetSize()
-		db.win = { x = cx - pw / 2, y = cy - ph / 2 }
+		local w = db.win
+		db.win = {
+			x = FiniteOr(cx - pw / 2, w.x),
+			y = FiniteOr(cy - ph / 2, w.y),
+		}
 		self:ClearAllPoints()
 		self:SetPoint("CENTER", UIParent, "CENTER", db.win.x, db.win.y)
 	end
@@ -887,9 +1031,9 @@ local LINK_KEYS = { "font", "size", "color", "outline", "text", "direction", "du
 -- enter-column control per link key (swatch/textBox names differ from keys)
 local LINK_CONTROLS = { font = "font", size = "size", color = "swatch", outline = "outline", text = "textBox", direction = "direction", duration = "duration", fade = "fade" }
 options.linkChecks = {}
-for i, key in ipairs(LINK_KEYS) do
+for _, key in ipairs(LINK_KEYS) do
 	local linkKey = key
-	local cb = CreateFrame("CheckButton", "FCALink" .. i, options, "UICheckButtonTemplate")
+	local cb = CreateFrame("CheckButton", nil, options, "UICheckButtonTemplate")
 	cb:SetSize(FCA_LINK_W, FCA_LINK_W)
 	cb:SetPoint("TOPLEFT", options, "TOPLEFT", 14, -92)
 	cb:SetScript("OnClick", function(self)
@@ -971,7 +1115,8 @@ local function MakeColumn(which, x)
 	end
 
 	-- labeled numeric box: type any value and press enter; it is clamped to
-	-- [lo, hi] (rounded to whole numbers when `whole`), non-numbers revert.
+	-- [lo, hi] (rounded to whole numbers when `whole`), non-numbers and
+	-- non-finite values revert.
 	-- Shifted right with the other text boxes to meet the dropdowns' visible
 	-- edge (see the geometry note above).
 	local function MakeNumberBox(label, y, maxLetters, field, linkKey, lo, hi, whole)
@@ -992,7 +1137,7 @@ local function MakeColumn(which, x)
 				return
 			end
 			local v = tonumber(self:GetText())
-			if v == nil then
+			if v == nil or not IsFinite(v) then
 				self:SetText(tostring(db[which][field]))
 				return
 			end
@@ -1011,7 +1156,7 @@ local function MakeColumn(which, x)
 	-- font dropdown: real dropdown widget, its label and every entry rendered
 	-- in their own font. The menu compositor wraps each entry region in a
 	-- proxy whose lookup asserts on SetFont (Blizzard_Menu/Compositor.lua;
-	-- `entry.fontString:SetFont` raised Bugsack 3x/7x on open), so entries
+	-- `entry.fontString:SetFont` raised on open), so entries
 	-- call FontString:SetFont itself; releasing the entry restores the menu
 	-- font (SetFontObject in the compositor's defaults)
 	col.font, col.fontLabel = MakeDropdown("Font", -4, FontList, "path", "font", "font", true)
@@ -1033,15 +1178,20 @@ local function MakeColumn(which, x)
 		if not db then
 			return
 		end
-		-- the stock picker opens at DIALOG strata, under our HIGH-strata window
-		ColorPickerFrame:SetFrameStrata("TOOLTIP")
-		if not colorPickerDragSetup then
-			colorPickerDragSetup = true
-			ColorPickerFrame:SetMovable(true)
-			ColorPickerFrame:EnableMouse(true)
-			ColorPickerFrame:RegisterForDrag("LeftButton")
-			ColorPickerFrame:SetScript("OnDragStart", ColorPickerFrame.StartMoving)
-			ColorPickerFrame:SetScript("OnDragStop", ColorPickerFrame.StopMovingOrSizing)
+		-- The picker is shared with Blizzard and other addons. DIALOG already
+		-- sits above our HIGH options window; TOOLTIP is only for the region
+		-- editor's own TOOLTIP input frame, and is given back on close. The
+		-- OnHide hook is additive; never replace the picker's scripts or drag
+		-- registration: other addons install their own handlers on this frame,
+		-- and its stock DragBar already moves it on every supported flavor.
+		if not colorPickerStrataHooked then
+			colorPickerStrataHooked = true
+			ColorPickerFrame:HookScript("OnHide", RestoreColorPickerStrata)
+		end
+		local prevStrata = ColorPickerFrame:GetFrameStrata()
+		if prevStrata ~= "TOOLTIP" then
+			colorPickerPrevStrata = prevStrata
+			ColorPickerFrame:SetFrameStrata("TOOLTIP")
 		end
 		local cfg = db[which]
 		local origHex = cfg.color
@@ -1238,7 +1388,7 @@ options.divider:SetPoint("TOP", options.enterCol.outline, "BOTTOM", 0, -8)
 
 -- vertical column separators: the left one hangs 5px left of the entering
 -- column's edge; the right one sits centered in its gap (6px each side --
--- Paint-measured off-center toward its right neighbors before). Both span
+-- measured off-center toward its right neighbors before). Both span
 -- top-to-bottom, crossing the header row like the columns do. Anchored to
 -- the right column of each gap so nothing can drift them.
 local function FCA_MakeVSeparator(anchorTo, xOff)
@@ -1322,7 +1472,7 @@ end)
 -- secret-marked -- the addon ingests no unit/combat/aura data, only the boolean
 -- combat flag (a control signal, never stored into frames or passed to gated
 -- APIs), and renders user-configured text on its own frames. If the engine ever
--- refuses, it errors LOUDLY (Bugsack, not silence): a silent queue would hide
+-- refuses, it errors LOUDLY (not silence): a silent queue would hide
 -- the bug, an error gets reported and fixed. The only guards left are
 -- crash-safety (nil options when the defensive UI build failed) and correctness
 -- (first-sync adopts silently, expired timelines release). No restriction
@@ -1367,6 +1517,8 @@ local function FCA_loaded(self, event, arg1)
 		db = _G[ADDON_NAME]
 		MigrateLegacy(db)
 		MergeDefaults(db, defaults)
+		SanitizeGeometry()
+		SanitizeAlertConfig()
 		SanitizeFonts(not IsLoggedIn())
 		if options then -- the defensive UI build may have failed; alerts stand alone
 			options:ClearAllPoints()
@@ -1417,6 +1569,10 @@ SlashCmdList.FCA = function(msg)
 		db = sv
 		MigrateLegacy(db)
 		MergeDefaults(db, defaults)
+		-- a reset during a live band drag must end the gesture first: the
+		-- stale drag rect would otherwise overwrite the reset on the next
+		-- frame (the editor stays open by design, so nothing else stops it)
+		DragStop()
 		ReleaseAllAlerts()
 		if RefreshAll then
 			RefreshAll() -- also re-lays the editor when it is open
