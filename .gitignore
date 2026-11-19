@@ -10,17 +10,10 @@ CF_API_KEY.txt
 *token*
 secret*
 
-# large local reference dumps & tooling indexes
-# (UI source dumps live at the workspace root under source/<X.Y.Z>/)
-source/
-.codegraph/
-
-# EXCLUSIONARY BY DEFAULT (house rule -- see ../AGENTS.md): everything is
-# ignored unless explicitly allowed below. A new file that isn't allowlisted
-# stays invisible to `git status` and can never reach the public repo or the
-# CurseForge zip by accident (the packager archives tracked files at the tag
-# -- untracked files never reach the runner). To track a new game file,
-# allowlist it here FIRST, then `git add` it.
+# DENY BY DEFAULT: everything is ignored unless explicitly allowed below.
+# A new file that isn't allowlisted stays invisible to `git status` and cannot
+# reach the published package. To track a new game file, allowlist it here
+# first, then `git add` it.
 *
 !*/
 
